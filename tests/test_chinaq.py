@@ -62,7 +62,7 @@ class ChinaqTests(unittest.TestCase):
 
         with patch.object(chinaq, "_get", side_effect=fake_get), patch.object(
             chinaq, "_qplays", return_value=["https://ukzy.ukubf3.com/20260914/x/index.m3u8"]
-        ), patch.object(chinaq, "proxied_media", side_effect=lambda u: "/api/hls?u=" + u):
+        ), patch.object(chinaq, "proxied_media", side_effect=lambda u: "/api/hls?u=" + u), patch.object(chinaq, "dlna_media_url"):
             detail = chinaq.fetch_video("cn-202659534", ep="24")
         self.assertEqual(detail.title, "獵罪現場")
         self.assertEqual([e.id for e in detail.episodes], ["1", "23", "24"])
@@ -81,7 +81,7 @@ class ChinaqTests(unittest.TestCase):
 
         with patch.object(chinaq, "_get", return_value=load("chinaq_show.html")), patch.object(
             chinaq, "_qplays", side_effect=fake_qplays
-        ), patch.object(chinaq, "proxied_media", side_effect=lambda u: "/api/hls?u=" + u):
+        ), patch.object(chinaq, "proxied_media", side_effect=lambda u: "/api/hls?u=" + u), patch.object(chinaq, "dlna_media_url"):
             chinaq.fetch_video("cn-202659534")
         self.assertEqual(seen, ["1"])
 

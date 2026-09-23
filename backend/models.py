@@ -14,12 +14,14 @@ class Card(BaseModel):
 
 
 class Tag(BaseModel):
+    browsable: bool = True
     name: str
     slug: str
     kind: str
 
 
 class Listing(BaseModel):
+    notice: str | None = None
     items: list[Card]
     page: int
     has_next: bool
@@ -60,6 +62,7 @@ class Episode(BaseModel):
 
 
 class VideoDetail(BaseModel):
+    resolved_episode_id: str | None = None
     id: str
     source: str = "hongguo"
     title: str

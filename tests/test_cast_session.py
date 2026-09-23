@@ -122,7 +122,7 @@ class RegistryTests(unittest.TestCase):
     def test_history_preserves_episode_and_legacy_seconds_are_not_misapplied(self):
         db.upsert_history("123", "Example", "", 42, 100, "hongguo", "3")
         self.assertEqual(db.get_history_item("123", "hongguo")["episode_id"], "3")
-        detail = VideoDetail(id="123", title="Example", cover="", playlist="", episodes=[Episode(id="1", title="1")])
+        detail = VideoDetail(id="123", title="Example", cover="", playlist="/api/hls?u=neutral", resolved_episode_id="3", episodes=[Episode(id="3", title="3", playlist="/api/hls?u=neutral")])
         with patch.object(main.sites, "get", return_value=Mock(fetch_video=Mock(return_value=detail))):
             self.assertEqual(main.video_on_source("hongguo", "123", None).position_sec, 42)
             db.upsert_history("123", "Example", "", 90, 100, "hongguo")

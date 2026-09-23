@@ -24,7 +24,7 @@ export function CastBar({ controller }: { controller: CastingController }) {
           <button className="btn alt" type="button" disabled={!canControl} onClick={() => void control(status?.paused ? "resume" : "pause")}>
             {status?.paused ? "電視續播" : "電視暫停"}
           </button>
-          <button className="btn alt" type="button" disabled={!active.session_id || !!status?.pending_action} onClick={() => void control("stop")}>停止投放</button>
+          <button className="btn alt" type="button" disabled={!active.session_id || status?.pending_action === "stop"} onClick={() => void control("stop")}>停止投放</button>
           {status?.phase === "error" ? <button className="btn alt" disabled={busy} onClick={() => void controller.retry()}>重試這一集</button> : null}
           {uncertain || status?.idle || status?.phase === "stopped" || status?.phase === "ended" ? <button className="btn alt" type="button" disabled={busy} onClick={() => void returnToLocal()}>我已用遙控器停止，回本機</button> : null}
         </> : null}

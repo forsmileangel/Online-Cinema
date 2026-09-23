@@ -256,6 +256,8 @@ def _confirm(uuid: str, cast, content_id: str, action: str, position: float = 0,
     if last_state:
         phase = "PLAYING" if last_state["playing"] else "PAUSED" if last_state["paused"] else "BUFFERING" if last_state["buffering"] else "STOPPED"
         detail = f"（最後狀態 {phase}，進度 {last_state['current_time']:.1f} 秒）"
+    if not isinstance(cast, dlna.Renderer) and getattr(getattr(cast, "status", None), "is_active_input", None) is False:
+        detail += "；電視尚未切到 Chromecast，請確認 SIMPLINK／HDMI-CEC 已開啟"
     raise TimeoutError(f"電視播放／控制確認逾時{detail}，請重試或停止投放")
 
 
@@ -276,6 +278,14 @@ def play(content_id: str, content_type: str, title: str, position: float = 0, uu
             query = parse_qs(parsed.query)
             query["cast_session"] = [marker]
             content_id = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
+        if not isinstance(cast, dlna.Renderer) and not expected:
+            # LOAD alone may reuse a background receiver without selecting its
+            # HDMI input. An explicit cast must issue LAUNCH to trigger CEC.
+            from pychromecast.config import APP_MEDIA_RECEIVER
+            cast.start_app(APP_MEDIA_RECEIVER, force_launch=True,
+                           timeout=_remaining(deadline, "啟動 Chromecast", 10))
+            if guard and not guard():
+                raise RuntimeError("投放已取消")
         _active[uuid] = content_id
         if isinstance(cast, dlna.Renderer):
             cast.play(content_id, content_type, title, deadline=deadline)

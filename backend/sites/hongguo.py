@@ -55,6 +55,8 @@ def _get(path: str) -> str:
         return http_client.fetch_html_hosts(
             url, HOSTS, impersonate="chrome131", referer=ORIGIN + "/", timeout=25
         )
+    except SiteBusy:
+        raise
     except UnsafeURL as e:
         if "blocked" in str(e).lower():
             raise SiteBusy("紅果短劇") from e

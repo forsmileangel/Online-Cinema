@@ -348,7 +348,7 @@ export function Player({
   }
 
   function toggleFs() {
-    const wrap = videoRef.current?.parentElement;
+    const wrap = videoRef.current?.closest<HTMLElement>(".player-screen") || videoRef.current?.parentElement;
     if (!wrap) return;
     if (document.fullscreenElement) void document.exitFullscreen();
     else void wrap.requestFullscreen();

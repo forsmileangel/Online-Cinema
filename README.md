@@ -35,3 +35,9 @@
 - 來源站改版時解析可能暫時失效；這不是官方 App。
 - 不做下載。
 - 內容來自各來源站，僅供你個人使用。
+
+## 背景常駐與新版播放流程
+
+在同層 Amberbox 執行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-background.ps1 -Apps OnlineCinema`，只建立／更新 Online Cinema 的獨立無視窗工作。登入後自啟，程序退出後自動恢復；記錄在 `%APPDATA%\OnlineCinema\server-logs`。變更區網設定後重啟「Online Cinema Server」工作即可，不必再開 start.bat。電腦睡眠、關機或登出時不提供服務。
+
+[新增片源與投放修正紀錄](docs/source-playback-repair-2026-09-23.md)。

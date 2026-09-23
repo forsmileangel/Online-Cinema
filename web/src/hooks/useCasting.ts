@@ -28,7 +28,9 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
     callbacks.current.onEpisode(next.episode_id, next.playlist, next.autoplay_next);
     const labels: Record<string, string> = { waking: "正在喚醒電視，最多等待 60 秒…", loading: "正在載入，等待電視確認播放…",
       playing: "電視已確認播放，本機保持暫停。關閉網頁後仍可自動連播。", paused: "電視已確認暫停", ended: "已播放完畢", stopped: "電視已停止" };
-    setMsg(next.error || next.warning || labels[next.phase] || "等待電視回應…");
+    const pendingLabel = next.pending_action === "stop" ? "正在停止投放，等待電視回應…"
+      : next.pending_action === "episode" ? "正在換集，確認片源與電視狀態中…" : "";
+    setMsg(next.error || pendingLabel || next.warning || labels[next.phase] || "等待電視回應…");
   }
 
   async function scan() {

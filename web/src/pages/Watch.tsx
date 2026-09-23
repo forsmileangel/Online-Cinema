@@ -160,7 +160,7 @@ export function Watch() {
     } catch {
       /* ignore */
     }
-    const pick = data.episode_id && ids.includes(data.episode_id) ? data.episode_id : ids.includes(saved) ? saved : ids[0];
+    const pick = data.resolved_episode_id && ids.includes(data.resolved_episode_id) ? data.resolved_episode_id : data.episode_id && ids.includes(data.episode_id) ? data.episode_id : ids.includes(saved) ? saved : ids[0];
     setResumeEp((cur) => cur || pick);
     setEpId((cur) => (ids.includes(cur) ? cur : pick));
   }, [data, source]);
@@ -230,14 +230,14 @@ export function Watch() {
     /* ignore */
   }
   const epIds = episodes.map((e) => e.id);
-  const activeEp = epIds.includes(epId) ? epId : data?.episode_id && epIds.includes(data.episode_id) ? data.episode_id : epIds.includes(savedEp) ? savedEp : epIds[0] || "";
+  const activeEp = epIds.includes(epId) ? epId : data?.resolved_episode_id && epIds.includes(data.resolved_episode_id) ? data.resolved_episode_id : data?.episode_id && epIds.includes(data.episode_id) ? data.episode_id : epIds.includes(savedEp) ? savedEp : epIds[0] || "";
   const currentEp = episodes.find((e) => e.id === activeEp);
   const playlist = currentEp?.playlist || (!episodes.length ? data?.playlist || "" : "");
   const resume = data?.episode_id || resumeEp;
   const startAt = episodes.length
     ? (!epTouched && data?.episode_id && activeEp === resume ? data?.position_sec || 0 : 0)
     : data?.position_sec || 0;
-  const castTitle = activeEp && episodes.length > 1 ? `${title} 第${activeEp}集` : title;
+  const castTitle = activeEp && episodes.length > 1 ? `${title} ${currentEp?.title || activeEp}` : title;
   const cast = useCasting({
     identity: `${source}:${id}`,
     context: { cover: data?.cover || "", source, video_id: id, episode_id: activeEp, autoplay_next: autoplay },
@@ -328,16 +328,18 @@ export function Watch() {
     <div className="watch">
       <div className={`watch-stage${manyEps ? " has-eps" : ""}`}>
         <div className="player-wrap">
-          {!cast.restoring && playlist && !episodeError ? (
-            <Player key={`${activeEp}:${resolveAttempt}`} onError={playbackError} src={playlist} startAt={startAt} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} />
-          ) : (
-            <div className="player">
-              <div className="empty">{episodeError ? "這一集無法播放" : `載入第${activeEp || ""}集…`}</div>
-              <FavUnderFs on={!!data.favorited} onClick={() => void toggleFav()} />
-            </div>
-          )}
+          <div className="player-screen">
+            {!cast.restoring && playlist && !episodeError ? (
+              <Player key={`${activeEp}:${resolveAttempt}`} onError={playbackError} src={playlist} startAt={startAt} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} />
+            ) : (
+              <div className="player">
+                <div className="empty">{episodeError ? "這一集無法播放" : `載入第${activeEp || ""}集…`}</div>
+                <FavUnderFs on={!!data.favorited} onClick={() => void toggleFav()} />
+              </div>
+            )}
+            {episodeError ? <p className="banner err" role="alert">{episodeError} <button className="btn" onClick={retryEpisode}>重試這一集</button></p> : null}
+          </div>
           <CastBar controller={cast} />
-          {episodeError ? <p className="banner err" role="alert">{episodeError} <button className="btn" onClick={retryEpisode}>重試這一集</button></p> : null}
         </div>
         {manyEps ? (
           <aside className="ep-rail" aria-label="選集">
@@ -381,7 +383,7 @@ export function Watch() {
         ) : null}
         <p className="muted">
           {data.id}
-          {activeEp && manyEps ? ` · 第${activeEp}集` : ""}
+          {activeEp && manyEps ? ` · ${currentEp?.title || activeEp}` : ""}
           {data.duration_label ? ` · ${data.duration_label}` : ""}
           {data.release_date ? ` · ${data.release_date}` : ""}
           {translating ? " · 翻譯中…" : ""}
@@ -430,7 +432,9 @@ export function Watch() {
         ) : null}
         {desc ? <p className="synopsis">{desc}</p> : null}
         <div className="chips">
-          {data.genres.map((t, i) => (
+          {data.genres.map((t, i) => t.browsable === false ? (
+            <span key={t.slug} className="chip">{zhName(data.actresses.length + i, t.name)}</span>
+          ) : (
             <Link key={t.slug} className="chip" to={`${prefix}/c/${t.kind || "genres"}/${encodeURIComponent(t.slug)}`}>
               {zhName(data.actresses.length + i, t.name)}
             </Link>

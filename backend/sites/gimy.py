@@ -6,12 +6,14 @@ import json
 import re
 import threading
 import time
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, urljoin, parse_qs
+from collections import OrderedDict
+from concurrent.futures import Future
 
 from bs4 import BeautifulSoup
 
 from .. import http_client
-from ..hls_proxy import proxied_media
+from ..hls_proxy import dlna_media_url, proxied_media
 from ..models import Card, Episode, Listing, PickChip, PickGroup, Tag, VideoDetail
 from ..security import (
     SiteBusy,
@@ -56,15 +58,24 @@ HOME_TITLES = {
 _HOT_TTL = 900.0
 _hot_lock = threading.Lock()
 _hot_memo: tuple[float, list[Card]] | None = None
+_search_lock = threading.Lock()
+_search_inflight: dict[tuple[str, int], Future] = {}
+_search_memo: OrderedDict[tuple[str, int], tuple[float, Listing]] = OrderedDict()
+_search_links: dict[str, tuple[float, dict[int, str]]] = {}
+_search_cooldown: tuple[float, SiteBusy] | None = None
+_SEARCH_TTL = 30.0
 
 
-def _get(path: str) -> str:
+def _get(path: str, *, timeout: float = 25) -> str:
     path = path if path.startswith("/") else "/" + path
     url = ORIGIN + path
     try:
         return http_client.fetch_html_hosts(
-            url, HOSTS, impersonate="chrome131", referer=ORIGIN + "/", timeout=25
+            url, HOSTS, impersonate="chrome131", referer=ORIGIN + "/", timeout=timeout
         )
+    except SiteBusy as e:
+        e.site = "Gimy 劇迷"
+        raise
     except UnsafeURL as e:
         if "blocked" in str(e).lower():
             raise SiteBusy("Gimy 劇迷") from e
@@ -173,6 +184,7 @@ def _pages(html: str, tid: str, page: int) -> int | None:
 
 def _listing(html: str, page: int, title: str, tid: str) -> Listing:
     items = parse_cards(html)
+    _remember_cards(items)
     pages = _pages(html, tid, page)
     if pages:
         has_next = page < pages
@@ -189,6 +201,7 @@ def _listing(html: str, page: int, title: str, tid: str) -> Listing:
 
 def home_bundle() -> tuple[list[tuple[str, str, list[Card]]], list[PickGroup]]:
     rows = parse_home_sections(_get("/"))
+    _remember_cards([card for _kind, _title, cards in rows for card in cards])
     picks = [
         PickGroup(
             title="分類",
@@ -230,44 +243,122 @@ def browse(kind: str, slug: str | None = None, page: int = 1) -> Listing:
     return _listing(_get(path), page, title, tid)
 
 
-def _hot_catalog() -> list[Card]:
+def _remember_cards(cards: list[Card]) -> None:
     global _hot_memo
+    if not cards:
+        return
     now = time.monotonic()
     with _hot_lock:
-        if _hot_memo and now - _hot_memo[0] < _HOT_TTL:
-            return _hot_memo[1]
-    seen: set[str] = set()
-    items: list[Card] = []
-    for path in ("/", "/label/top.html", "/genre/13.html", "/genre/20.html", "/genre/14.html", "/genre/15.html", "/genre/2.html"):
-        try:
-            for card in parse_cards(_get(path)):
-                if card.id in seen:
-                    continue
-                seen.add(card.id)
-                items.append(card)
-        except Exception:
-            continue
+        previous = _hot_memo[1] if _hot_memo and now - _hot_memo[0] < _HOT_TTL else []
+        merged = {card.id: card for card in previous}
+        merged.update((card.id, card) for card in cards)
+        _hot_memo = (now, list(merged.values())[-500:])
+
+
+def _cached_search(q: str, page: int) -> Listing | None:
     with _hot_lock:
-        _hot_memo = (time.monotonic(), items)
-    return items
+        cards = list(_hot_memo[1]) if _hot_memo and time.monotonic() - _hot_memo[0] < _HOT_TTL else []
+    if not cards:
+        return None
+    items = [card for card in cards if q.casefold() in card.title.casefold()]
+    start = (page - 1) * 24
+    pages = max(1, (len(items) + 23) // 24)
+    return Listing(items=items[start:start + 24], page=page, has_next=page < pages,
+                   title=q, pages=pages if pages > 1 else None,
+                   notice="來源搜尋暫時無法使用，僅搜尋已載入片單；結果不代表完整片庫。")
+
+
+def _page_links(html: str, q: str, page: int, path: str) -> dict[int, str]:
+    links = {page: path}
+    soup = BeautifulSoup(html, "html.parser")
+    for anchor in soup.select("a[href]"):
+        url = urlparse(urljoin(ORIGIN + path, anchor.get("href") or ""))
+        if (url.scheme != "https" or url.hostname not in HOSTS or url.username or url.password
+                or url.netloc not in HOSTS or url.fragment or not url.path.startswith("/find/")
+                or parse_qs(url.query).get("wd") != [q]):
+            continue
+        text = anchor.get_text(" ", strip=True)
+        number = int(text) if text.isdigit() else page + 1 if "下一" in text or "next" in anchor.get("rel", []) else 0
+        if 1 <= number <= 200:
+            links[number] = url.path + ("?" + url.query if url.query else "")
+    return links
+
+
+def _search_once(q: str, page: int) -> Listing:
+    global _search_cooldown
+    with _search_lock:
+        cooldown = _search_cooldown
+        known = _search_links.get(q)
+    if cooldown and time.monotonic() < cooldown[0]:
+        cached = _cached_search(q, page)
+        if cached is not None:
+            return cached
+        raise cooldown[1]
+    if page == 1:
+        path = f"/find/-------------.html?wd={quote(q)}"
+    else:
+        path = known[1].get(page) if known and time.monotonic() - known[0] < _HOT_TTL else None
+        if not path:
+            return Listing(items=[], page=page, has_next=False, title=q, notice="這個搜尋頁碼已失效，請回到第一頁重新搜尋。")
+    try:
+        html = _get(path)
+        items = parse_cards(html)
+        links = _page_links(html, q, page, path)
+        with _search_lock:
+            now = time.monotonic()
+            for key in [key for key, value in _search_links.items() if now - value[0] >= _HOT_TTL]:
+                del _search_links[key]
+            if q not in _search_links and len(_search_links) >= 100:
+                del _search_links[next(iter(_search_links))]
+            previous = known[1] if known and now - known[0] < _HOT_TTL else {}
+            _search_links[q] = (now, {**previous, **links})
+            _search_cooldown = None
+        _remember_cards(items)
+        return Listing(items=items, page=page, has_next=page + 1 in links, title=q)
+    except SiteBusy as e:
+        with _search_lock:
+            _search_cooldown = (time.monotonic() + (e.retry_after if e.retry_after is not None else 30), e)
+        cached = _cached_search(q, page)
+        if cached is not None:
+            return cached
+        raise
+    except Exception:
+        cached = _cached_search(q, page)
+        if cached is not None:
+            return cached
+        raise
 
 
 def search(query: str, page: int = 1) -> Listing:
     q = safe_search_query(query)
     page = max(1, min(int(page), 200))
-    needle = q.casefold()
+    key = (q, page)
+    with _search_lock:
+        cached = _search_memo.get(key)
+        if cached and time.monotonic() - cached[0] < _SEARCH_TTL:
+            return cached[1]
+        future = _search_inflight.get(key)
+        owner = future is None
+        if owner:
+            future = Future()
+            _search_inflight[key] = future
+    if not owner:
+        return future.result(timeout=30)
     try:
-        html = _get(f"/find/-------------.html?wd={quote(q)}")
-        listing = _listing(html, page, q, "2")
-        if listing.items:
-            return listing
-    except (SiteBusy, UnsafeURL):
-        pass
-    items = [c for c in _hot_catalog() if needle in (c.title or "").casefold()]
-    start = (page - 1) * 24
-    chunk = items[start : start + 24]
-    pages = max(1, (len(items) + 23) // 24) if items else 1
-    return Listing(items=chunk, page=page, has_next=page < pages, title=q, pages=pages if pages > 1 else None)
+        result = _search_once(q, page)
+        with _search_lock:
+            _search_memo[key] = (time.monotonic(), result)
+            _search_memo.move_to_end(key)
+            while len(_search_memo) > 100:
+                _search_memo.popitem(last=False)
+        future.set_result(result)
+        return result
+    except Exception as e:
+        future.set_exception(e)
+        raise
+    finally:
+        with _search_lock:
+            _search_inflight.pop(key, None)
 
 
 def _safe_ep(raw: str | None) -> str | None:
@@ -355,7 +446,8 @@ def _prefer_routes(routes: list[tuple[str, str, list[str]]]) -> list[tuple[str, 
 def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
     video_id = safe_video_id(video_id)
     want = _safe_ep(ep)
-    html = _get(f"/detail/{video_id}.html")
+    deadline = time.monotonic() + 45
+    html = _get(f"/detail/{video_id}.html", timeout=25)
     routes = _prefer_routes(_routes(html, video_id))
     if not routes:
         raise UnsafeURL("stream not found")
@@ -363,39 +455,38 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
     chosen: tuple[str, str, list[str]] | None = None
     data: dict = {}
     src = ""
-    nxt = ""
-    for sid, title, eps in routes[:8]:
-        if pick_ep not in eps:
-            continue
-        play_html = _get(f"/play/{video_id}-{sid}-{pick_ep}.html")
-        data = _player_data(play_html)
-        src = _play_url(data)
-        if not src:
-            continue
-        nxt = (data.get("url_next") or "").replace("\\/", "/").strip()
-        if nxt and not nxt.startswith("https://"):
-            nxt = ""
-        chosen = (sid, title, eps)
-        break
-    if not chosen or not src:
-        raise UnsafeURL("stream not found")
+    master = ""
+    last_error: Exception | None = None
+    candidates = [route for route in routes if pick_ep in route[2]][:3]
+    for sid, title, eps in candidates:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Gimy 解析逾時")
+        try:
+            play_html = _get(f"/play/{video_id}-{sid}-{pick_ep}.html", timeout=min(25, remaining))
+            data = _player_data(play_html)
+            src = _play_url(data)
+            master = _hls(src)
+            if not master:
+                continue
+            # A valid master URL may still contain unsupported segment URLs.
+            # Check the playlist before choosing a route or stopping the TV.
+            dlna_media_url(master, deadline, validate=True)
+            chosen = (sid, title, eps)
+            break
+        except SiteBusy:
+            raise
+        except Exception as e:
+            last_error = e
+    if not chosen or not master:
+        raise last_error or UnsafeURL("stream not found")
     sid, _route_title, ep_ids = chosen
     if pick_ep not in ep_ids:
         ep_ids = sorted(set(ep_ids + [pick_ep]), key=lambda x: int(x))
-    srcs: dict[str, str] = {pick_ep: src}
-    try:
-        nxt_id = str(int(pick_ep) + 1)
-    except ValueError:
-        nxt_id = ""
-    if nxt and nxt_id:
-        srcs[nxt_id] = nxt
     episodes = [
-        Episode(id=eid, title=f"第{eid}集", playlist=_hls(srcs.get(eid, "")))
+        Episode(id=eid, title=f"第{eid}集", playlist=master if eid == pick_ep else "")
         for eid in ep_ids
     ]
-    master = _hls(src)
-    if not master:
-        raise UnsafeURL("stream not found")
     soup = BeautifulSoup(html, "html.parser")
     h1 = soup.select_one("h1.detail__title, h1")
     title = (h1.get_text(" ", strip=True) if h1 else "") or str((data.get("vod_data") or {}).get("vod_name") or "") or video_id
@@ -409,13 +500,17 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
         if not name:
             continue
         m = re.search(r"/genre/(\d+)", a.get("href") or "")
-        genres.append(Tag(name=name[:40], slug=m.group(1) if m else name[:40], kind="genre"))
+        category = next((key for key, (tid, _label) in GENRES.items() if m and tid == m.group(1) and key != "featured"), None)
+        genres.append(Tag(name=name[:40], slug=m.group(1) if m else name[:40], kind=category or "tag", browsable=category is not None))
         if len(genres) >= 6:
             break
     related = [c for c in parse_cards(html) if c.id != video_id][:12]
+    if time.monotonic() >= deadline:
+        raise TimeoutError("Gimy 解析逾時")
     return VideoDetail(
         id=video_id,
         source="gimy",
+        resolved_episode_id=pick_ep,
         title=title[:500],
         cover=cover,
         description=(desc[:2000] if desc else None),

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import threading
-from typing import Any
+import time
+import logging
+from typing import Any, Callable
+from urllib.parse import urljoin, urlparse
 
 from curl_cffi import requests
 
 from . import settings as S
-from .security import UnsafeURL, final_url_still_allowed
+from .security import UnsafeURL, SiteBusy, final_url_still_allowed, touch_media_host
 
 _lock = threading.Lock()
 _req_lock = threading.Lock()
@@ -77,8 +80,11 @@ def fetch_html_hosts(
         with _req_lock:
             r = session().get(url, headers=headers, timeout=timeout, allow_redirects=True)
     final_url_still_allowed(str(r.url), allowed_hosts)
-    if r.status_code == 403:
-        raise UnsafeURL("blocked by remote")
+    if r.status_code in (403, 429, 503):
+        error = SiteBusy.from_response(r)
+        logging.getLogger(__name__).warning("Upstream %s status=%s", error.site, error.status_code)
+        close_response(r)
+        raise error
     r.raise_for_status()
     text = r.text or ""
     if len(text) > 6_000_000:
@@ -96,6 +102,7 @@ def fetch_bytes(
     impersonate: str | None = None,
     method: str = "GET",
     range_header: str | None = None,
+    redirect_validator: Callable[[str, str], str] | None = None,
 ) -> Any:
     headers = {
         "Accept": "*/*",
@@ -105,22 +112,45 @@ def fetch_bytes(
     sess = media_session(impersonate)
     if range_header:
         headers["Range"] = range_header
-    r = sess.request(
-        method,
-        url,
-        headers=headers,
-        timeout=timeout,
-        allow_redirects=True,
-        stream=stream,
-    )
-    try:
-        final_url_still_allowed(str(r.url), allowed_hosts)
-        if r.status_code >= 400 and not (range_header and r.status_code == 416):
-            r.raise_for_status()
-    except Exception:
-        close_response(r)
-        raise
-    return r
+    deadline = time.monotonic() + timeout
+    for redirect in range(4):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("media request timed out")
+        r = sess.request(
+            method,
+            url,
+            headers=headers,
+            timeout=remaining,
+            allow_redirects=redirect_validator is None,
+            stream=stream,
+        )
+        try:
+            final_url_still_allowed(str(r.url), allowed_hosts)
+            if redirect_validator and r.status_code in (301, 302, 303, 307, 308):
+                if redirect == 3 or not r.headers.get("location"):
+                    raise UnsafeURL("invalid media redirect chain")
+                target = urljoin(str(r.url), r.headers["location"])
+                # Validate each hop before connecting, using the same policy as
+                # a child URI from this trusted media playlist.
+                redirect_validator(target, urlparse(str(r.url)).hostname or "")
+                allowed_hosts = allowed_hosts | {urlparse(target).hostname or ""}
+                final_url_still_allowed(target, allowed_hosts)
+                close_response(r)
+                url = target
+                continue
+            if r.status_code in (403, 429, 503):
+                error = SiteBusy.from_response(r)
+                logging.getLogger(__name__).warning("Upstream %s status=%s", error.site, error.status_code)
+                raise error
+            if r.status_code >= 400 and not (range_header and r.status_code == 416):
+                r.raise_for_status()
+            if 200 <= r.status_code < 300:
+                touch_media_host(str(r.url))
+        except Exception:
+            close_response(r)
+            raise
+        return r
 
 
 def close_response(r: Any) -> None:

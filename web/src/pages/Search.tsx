@@ -38,6 +38,7 @@ export function Search() {
   return (
     <div>
       <h1 className="h1">搜尋「{q}」</h1>
+      {data.notice ? <p className="muted" role="status">{data.notice}</p> : null}
       <PosterGrid items={data.items} large />
       <Pager page={page} pages={data.pages} hasNext={data.has_next} onPage={setPage} />
     </div>

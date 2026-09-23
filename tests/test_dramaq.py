@@ -61,10 +61,10 @@ class DramaqTests(unittest.TestCase):
         self.assertEqual(detail.title, "未來全明星 第八季(All American Season 8)")
         self.assertEqual(detail.release_date, "2026")
         self.assertEqual([tag.name for tag in detail.genres], ["劇情", "運動"])
-        self.assertEqual([episode.id for episode in detail.episodes], [f"ep{n}" for n in range(1, 14)])
+        self.assertEqual([episode.id for episode in detail.episodes], [f"ep{n}" for n in range(1, 13)])
         self.assertIn("bfvvs.com", detail.playlist)
-        self.assertTrue(detail.episodes[11].playlist)
-        self.assertFalse(detail.episodes[0].playlist)
+        self.assertTrue(detail.episodes[0].playlist)
+        self.assertFalse(detail.episodes[11].playlist)
 
     def test_cdn_and_cover_hosts_are_allowed(self):
         with patch("backend.security._assert_not_private"):

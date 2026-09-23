@@ -12,6 +12,8 @@ from urllib.parse import urlparse
 from . import http_client, seg_cache
 from .security import (
     UnsafeURL,
+    SiteBusy,
+    touch_media_host,
     assert_hls_url,
     assert_https_url,
     hls_allowed_hosts,
@@ -37,7 +39,7 @@ def _playlist_media_url(url: str, parent_host: str) -> str:
     try:
         return assert_hls_url(url)
     except UnsafeURL:
-        if not is_chinaq_cdn(parent_host):
+        if not (is_chinaq_cdn(parent_host) or is_dramaq_cdn(parent_host)):
             raise
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
@@ -87,7 +89,26 @@ def _media_context(url: str) -> tuple[str, str | None]:
     return (f"https://{host}/" if host else "https://www.hongguoapp.cn/"), "chrome131"
 
 
-def dlna_media_url(proxy_url: str, deadline: float) -> str:
+def _read_playlist(upstream_url: str, deadline: float) -> tuple[str, str]:
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("播放清單讀取逾時，請重試")
+    referer, impersonate = _media_context(upstream_url)
+    response = http_client.fetch_bytes(upstream_url, referer=referer, allowed_hosts=hls_allowed_hosts(upstream_url),
+                                       timeout=min(left, 10), impersonate=impersonate, redirect_validator=_playlist_media_url)
+    try:
+        raw = response.content
+        base_url = str(response.url)
+    finally:
+        http_client.close_response(response)
+    if time.monotonic() >= deadline:
+        raise TimeoutError("播放清單讀取逾時，請重試")
+    if len(raw) > 2_000_000 or not raw.lstrip().startswith(b"#EXTM3U"):
+        raise UnsafeURL("invalid playlist")
+    return raw.decode("utf-8", "replace"), base_url
+
+
+def dlna_media_url(proxy_url: str, deadline: float, *, validate: bool = False) -> str:
     # LG can stall on an early, long-distance seek while its master playlist
     # switches renditions. A muxed media playlist keeps the same encoded media
     # and timeline while avoiding that native ABR/seek interaction.
@@ -98,22 +119,10 @@ def dlna_media_url(proxy_url: str, deadline: float) -> str:
     upstream_url = assert_hls_url(urls[0])
     if not urlparse(upstream_url).path.lower().endswith(".m3u8"):
         return proxy_url
-    left = deadline - time.monotonic()
-    if left <= 0:
-        raise TimeoutError("LG 選擇播放畫質逾時，請重試")
-    referer, impersonate = _media_context(upstream_url)
-    response = http_client.fetch_bytes(upstream_url, referer=referer, allowed_hosts=hls_allowed_hosts(upstream_url),
-                                       timeout=min(left, 10), impersonate=impersonate)
-    try:
-        raw = response.content
-        base_url = str(response.url)
-    finally:
-        http_client.close_response(response)
-    if time.monotonic() >= deadline:
-        raise TimeoutError("LG 選擇播放畫質逾時，請重試")
-    if len(raw) > 2_000_000 or not raw.lstrip().startswith(b"#EXTM3U"):
-        raise UnsafeURL("invalid playlist")
-    lines = raw.decode("utf-8", "replace").splitlines()
+    text, base_url = _read_playlist(upstream_url, deadline)
+    if validate:
+        rewrite_playlist(text, base_url)
+    lines = text.splitlines()
     external_audio = set()
     for line in lines:
         if line.startswith("#EXT-X-MEDIA:"):
@@ -140,7 +149,12 @@ def dlna_media_url(proxy_url: str, deadline: float) -> str:
     if not variants:
         return proxy_url
     chosen = max(variants, key=lambda variant: variant[0])[1]
-    return proxied_media(chosen, f"{parsed.scheme}://{parsed.netloc}")
+    _playlist_media_url(chosen, (urlparse(base_url).hostname or "").lower())
+    if validate:
+        text, child_base = _read_playlist(chosen, deadline)
+        rewrite_playlist(text, child_base)
+    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else ""
+    return proxied_media(chosen, origin)
 
 
 def serve_media(request: Request, raw_url: str) -> Response:
@@ -160,6 +174,7 @@ def serve_media(request: Request, raw_url: str) -> Response:
         seg_cache.start_workers()
         cached = seg_cache.get(url)
         if cached is not None:
+            touch_media_host(url)
             seg_cache.enqueue_next(url, referer)
             return Response(cached, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
 
@@ -169,8 +184,13 @@ def serve_media(request: Request, raw_url: str) -> Response:
             candidate = assert_hls_url(candidates[min(attempt, len(candidates) - 1)])
             response = http_client.fetch_bytes(candidate, referer=referer, allowed_hosts=hls_allowed_hosts(candidate), timeout=6 if len(candidates) > 1 else 30,
                                                stream=not playlist and not cacheable, impersonate=imp,
-                                               method="GET" if playlist else request.method, range_header=None if playlist else range_header)
+                                               method="GET" if playlist else request.method, range_header=None if playlist else range_header,
+                                               redirect_validator=_playlist_media_url)
             break
+        except SiteBusy:
+            raise
+        except UnsafeURL:
+            raise
         except Exception:
             if attempt == 2:
                 raise
@@ -205,7 +225,12 @@ def serve_media(request: Request, raw_url: str) -> Response:
 
     def chunks():
         try:
-            yield from response.iter_content(chunk_size=256 * 1024)
+            renewed = time.monotonic()
+            for chunk in response.iter_content(chunk_size=256 * 1024):
+                if time.monotonic() - renewed >= 60:
+                    touch_media_host(url)
+                    renewed = time.monotonic()
+                yield chunk
         finally:
             http_client.close_response(response)
     return StreamingResponse(chunks(), status_code=response.status_code,

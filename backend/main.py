@@ -41,6 +41,7 @@ from .models import (
 from .security import (
     IMAGE_HOSTS,
     SiteBusy,
+    SourceUnavailable,
     UnsafeURL,
     assert_hls_url,
     assert_image_url,
@@ -110,10 +111,12 @@ async def media_cors(request: Request, call_next):
 
 
 def _err(exc: Exception, status: int = 400) -> HTTPException:
+    if isinstance(exc, SourceUnavailable):
+        return HTTPException(404, str(exc))
     if isinstance(exc, TimeoutError):
         return HTTPException(504, "來源載入逾時，請重試")
     if isinstance(exc, SiteBusy):
-        return HTTPException(503, f"{exc.site} 暫時限制連線，等十幾秒再搜或再點播放")
+        return HTTPException(exc.status_code or 503, str(exc), headers={"Retry-After": str(exc.retry_after)} if exc.retry_after is not None else None)
     if isinstance(exc, UnsafeURL):
         return HTTPException(status, "請求被拒絕")
     return HTTPException(502, "來源站暫時無法使用")
@@ -207,13 +210,16 @@ def video_on_source(source: str, video_id: str, ep: str | None = Query(None, max
     try:
         video_id = safe_video_id(video_id)
         site = sites.get(src)
-        detail = site.fetch_video(video_id, ep=ep)
+        hist = db.get_history_item(video_id, src)
+        selected_ep = ep or (hist.get("episode_id") if hist else None)
+        detail = site.fetch_video(video_id, ep=selected_ep)
         detail.source = src
         detail.favorited = db.is_favorite(video_id, src)
-        hist = db.get_history_item(video_id, src)
+        if detail.episodes and not detail.resolved_episode_id:
+            detail.resolved_episode_id = next((e.id for e in detail.episodes if e.playlist == detail.playlist), None)
         if hist:
             detail.episode_id = hist.get("episode_id")
-            if not detail.episodes or detail.episode_id:
+            if not detail.episodes or (detail.episode_id and detail.episode_id == detail.resolved_episode_id):
                 detail.position_sec = float(hist["position_sec"] or 0)
         return detail
     except HTTPException:

@@ -15,7 +15,12 @@ def load(name: str) -> str:
 
 class GimyTests(unittest.TestCase):
     def setUp(self):
+        validate = patch.object(gimy, "dlna_media_url")
+        validate.start(); self.addCleanup(validate.stop)
         gimy._hot_memo = None
+        gimy._search_memo.clear()
+        gimy._search_links.clear()
+        gimy._search_cooldown = None
 
     def test_source_is_registered(self):
         ids = {s["id"] for s in available()}
@@ -44,20 +49,15 @@ class GimyTests(unittest.TestCase):
         with self.assertRaises(UnsafeURL):
             gimy.browse("nope")
 
-    def test_search_falls_back_to_hot_catalog(self):
-        def fake_get(path: str) -> str:
-            if path.startswith("/find/"):
-                raise gimy.SiteBusy("Gimy 劇迷")
-            if path == "/":
-                return load("gimy_home.html")
-            return load("gimy_list.html")
-
-        with patch.object(gimy, "_get", side_effect=fake_get):
-            listing = gimy.search("蘭香")
-        self.assertEqual([c.id for c in listing.items], ["485760"])
+    def test_search_rejection_without_cached_catalog_is_not_an_empty_result(self):
+        with patch.object(gimy, "_get", side_effect=gimy.SiteBusy("Gimy 劇迷", 403)) as get:
+            with self.assertRaises(gimy.SiteBusy):
+                gimy.search("蘭香")
+        self.assertEqual(get.call_count, 1)
+        self.assertIsNone(gimy._hot_memo)
 
     def test_fetch_video_skips_official_line_and_uses_yun_hls(self):
-        def fake_get(path: str) -> str:
+        def fake_get(path: str, **kwargs) -> str:
             if path.startswith("/detail/"):
                 return load("gimy_detail.html")
             if path.startswith("/play/485760-7-"):

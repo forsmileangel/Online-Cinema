@@ -8,11 +8,12 @@ export type Card = {
   original_title?: string | null;
 };
 
-export type Tag = { name: string; slug: string; kind: string };
+export type Tag = { name: string; slug: string; kind: string; browsable?: boolean };
 
 export type Episode = { id: string; title: string; playlist: string };
 
 export type Listing = {
+  notice?: string | null;
   items: Card[];
   page: number;
   has_next: boolean;
@@ -32,6 +33,7 @@ export type HomePayload = {
 };
 
 export type VideoDetail = {
+  resolved_episode_id?: string | null;
   id: string;
   source?: string;
   title: string;

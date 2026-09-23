@@ -9,9 +9,9 @@ import uuid as uuid_module
 from urllib.parse import parse_qs, urlparse
 
 from . import cast, catalog, db, hls_proxy, sites
-from .security import assert_hls_url, safe_video_id
+from .security import SiteBusy, assert_hls_url, safe_video_id
 
-SERIES_SOURCES = {"hongguo"}
+SERIES_SOURCES = {"hongguo", "chinaq", "gimy", "dramaq"}
 TERMINAL = {"ended", "stopped", "error", "replaced"}
 
 
@@ -77,6 +77,8 @@ class PlaybackSession:
                 self._load(episode, position)
                 self.prefetch()
                 return
+            except SiteBusy:
+                raise
             except Exception:
                 self.prefetched = None
                 if not self.valid() or attempt or self.body.get("source") not in SERIES_SOURCES:
@@ -116,12 +118,12 @@ class PlaybackSession:
             detail = cached[2] if cached and cached[0] == episode and time.monotonic() - cached[1] < 120 else sites.get(source).fetch_video(self.body["video_id"], ep=episode or None)
             self.detail = detail
             self.episode_ids = [e.id for e in detail.episodes]
-            episode = episode or (self.episode_ids[0] if self.episode_ids else "")
+            episode = episode or detail.resolved_episode_id or (self.episode_ids[0] if self.episode_ids else "")
             selected = next((e for e in detail.episodes if e.id == episode), None)
             if detail.episodes and not selected:
                 raise ValueError("找不到這一集，請重新載入選集")
             playlist = selected.playlist if selected else detail.playlist
-            title = f"{detail.title} 第{episode}集" if episode else detail.title
+            title = f"{detail.title} {selected.title}" if selected else detail.title
         if not playlist:
             raise ValueError("這一集解析失敗，請重試")
         parsed = urlparse(playlist)

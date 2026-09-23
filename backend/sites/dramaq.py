@@ -28,7 +28,6 @@ DETAIL_RE = re.compile(r"/detail/(\d+)\.html")
 PLAY_RE = re.compile(r"/vodplay/(\d+)/([A-Za-z0-9]+)\.html")
 TOKEN_RE = re.compile(r"(?:ep[1-9]\d{0,7}|[1-9]\d{7}|[1-9]\d{0,3})")
 EP_NUM_RE = re.compile(r"^ep([1-9]\d*)$")
-COUNT_RE = re.compile(r"【集數】\s*(\d{1,4})")
 PAGE = 48
 _ALL_TTL = 900.0
 _all_lock = threading.Lock()
@@ -50,6 +49,8 @@ def _get(path: str) -> str:
         return http_client.fetch_html_hosts(
             url, HOSTS, impersonate="chrome131", referer=ORIGIN + "/", timeout=40 if path.startswith("/all") else 25
         )
+    except SiteBusy:
+        raise
     except UnsafeURL as e:
         if "blocked" in str(e).lower():
             raise SiteBusy("DramaQ") from e
@@ -251,15 +252,14 @@ def _tokens(html: str, video_id: str) -> list[str]:
     return found
 
 
-def _fill_numbered(tokens: list[str], html: str) -> list[str]:
+def _fill_numbered(tokens: list[str]) -> list[str]:
     nums = []
     for token in tokens:
         m = EP_NUM_RE.match(token)
         if not m:
             return tokens
         nums.append(int(m.group(1)))
-    count_m = COUNT_RE.search(html or "")
-    count = int(count_m.group(1)) if count_m else (max(nums) if nums else 0)
+    count = max(nums) if nums else 0
     if not nums or count < 1 or count > 400 or count < max(nums):
         return tokens
     return [f"ep{n}" for n in range(1, count + 1)]
@@ -285,8 +285,8 @@ def _plays(video_id: str, token: str) -> list[str]:
     try:
         response = http_client.media_session("chrome131").get(url, headers=headers, timeout=20, allow_redirects=True)
         final_url_still_allowed(str(response.url), HOSTS)
-        if response.status_code == 403:
-            raise SiteBusy("DramaQ")
+        if response.status_code in (403, 429, 503):
+            raise SiteBusy.from_response(response, "DramaQ")
         response.raise_for_status()
         data = response.json()
     except SiteBusy:
@@ -328,7 +328,7 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
     if want:
         want = _token_path(want) if re.fullmatch(r"[1-9]\d{0,3}", want) else want
     detail_html = _get(f"/detail/{video_id}.html")
-    tokens = _tokens(detail_html, video_id)
+    tokens = _sort_tokens(_fill_numbered(_tokens(detail_html, video_id)))
     pick = want or (tokens[0] if tokens else "ep1")
     pick = _safe_token(pick)
     play_html = _get(f"/vodplay/{video_id}/{_token_path(pick)}.html")
@@ -337,7 +337,7 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
             tokens.append(token)
     if pick not in tokens:
         tokens.append(pick)
-    tokens = _sort_tokens(_fill_numbered(tokens, detail_html))
+    tokens = _sort_tokens(_fill_numbered(tokens))
     master = ""
     for src in _plays(video_id, pick):
         master = _hls(src)
@@ -364,7 +364,7 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
             if not name or name in seen:
                 continue
             seen.add(name)
-            genres.append(Tag(name=name[:40], slug=name[:40], kind="tag"))
+            genres.append(Tag(name=name[:40], slug=name[:40], kind="tag", browsable=False))
             if len(genres) >= 8:
                 break
     release = None
@@ -377,6 +377,7 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
     return VideoDetail(
         id=video_id,
         source="dramaq",
+        resolved_episode_id=pick,
         title=title[:500],
         cover=cover,
         description=(text[:2000] if text else None),

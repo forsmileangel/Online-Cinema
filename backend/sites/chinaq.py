@@ -11,10 +11,11 @@ from urllib.parse import quote, urlparse
 from bs4 import BeautifulSoup
 
 from .. import http_client
-from ..hls_proxy import proxied_media
+from ..hls_proxy import dlna_media_url, proxied_media
 from ..models import Card, Episode, Listing, PickChip, PickGroup, Tag, VideoDetail
 from ..security import (
     SiteBusy,
+    SourceUnavailable,
     UnsafeURL,
     assert_image_url,
     final_url_still_allowed,
@@ -59,6 +60,8 @@ def _get(path: str) -> str:
         return http_client.fetch_html_hosts(
             url, HOSTS, impersonate="chrome131", referer=ORIGIN + "/", timeout=40 if path.startswith("/all") else 25
         )
+    except SiteBusy:
+        raise
     except UnsafeURL as e:
         if "blocked" in str(e).lower():
             raise SiteBusy("中國人線上看") from e
@@ -273,11 +276,13 @@ def _qplays(num: str, ep: str) -> list[str]:
     try:
         r = http_client.media_session("chrome131").get(url, headers=headers, timeout=20, allow_redirects=True)
         final_url_still_allowed(str(r.url), HOSTS)
-        if r.status_code == 403:
-            raise SiteBusy("中國人線上看")
+        if r.status_code in (403, 429, 503):
+            raise SiteBusy.from_response(r, "中國人線上看")
+        if r.status_code == 404:
+            raise SourceUnavailable("此來源目前沒有提供這一集的播放連結")
         r.raise_for_status()
         data = r.json()
-    except SiteBusy:
+    except (SiteBusy, SourceUnavailable):
         raise
     except Exception as e:
         low = str(e).lower()
@@ -304,10 +309,28 @@ def _qplays(num: str, ep: str) -> list[str]:
 
 
 def _pick_stream(urls: list[str]) -> str:
+    deadline = time.monotonic() + 30
+    last_error: Exception | None = None
+    attempts = 0
     for src in urls:
+        if attempts >= 3:
+            break
+        if time.monotonic() >= deadline:
+            raise TimeoutError("中國人線上看解析逾時")
         proxied = _hls(src)
-        if proxied:
+        if not proxied:
+            continue
+        attempts += 1
+        try:
+            # A listed source can be empty or contain unusable media URLs.
+            dlna_media_url(proxied, deadline, validate=True)
             return proxied
+        except SiteBusy:
+            raise
+        except Exception as exc:
+            last_error = exc
+    if last_error:
+        raise last_error
     return ""
 
 
@@ -325,11 +348,13 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
     if desc:
         desc = desc.replace("【簡介】", "").strip()
     ep_ids = _episodes(html, region, num)
-    if want and want not in ep_ids:
-        ep_ids.append(want)
-        ep_ids = sorted(set(ep_ids), key=lambda x: int(x))
     if not ep_ids:
-        ep_ids = [want or "1"]
+        trailer_path = f"/tv-{region}/{num}/yu_gao_pian.html"
+        if soup.find("a", href=trailer_path):
+            raise SourceUnavailable("此來源目前只有預告片，尚未提供正片集數")
+        raise SourceUnavailable("此來源目前沒有可播放的正片集數")
+    if want and want not in ep_ids:
+        raise SourceUnavailable("此來源尚未提供指定集數，請選擇已上架集數")
     pick = want or ep_ids[0]
     master = _pick_stream(_qplays(num, pick))
     if not master:
@@ -348,7 +373,7 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
             if not name or name in seen:
                 continue
             seen.add(name)
-            genres.append(Tag(name=name[:40], slug=name[:40], kind="tag"))
+            genres.append(Tag(name=name[:40], slug=name[:40], kind="tag", browsable=False))
             if len(genres) >= 8:
                 break
     release = None
@@ -359,6 +384,7 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
     return VideoDetail(
         id=video_id,
         source="chinaq",
+        resolved_episode_id=pick,
         title=title[:500],
         cover=_cover(num),
         description=(desc[:2000] if desc else None),

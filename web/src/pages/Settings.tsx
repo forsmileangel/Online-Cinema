@@ -47,7 +47,7 @@ export function SettingsPage() {
   return (
     <div>
       <h1 className="h1">設定</h1>
-      <p className="muted">服務只聽本機 127.0.0.1:6970，瀏覽器不會開原站，廣告腳本也不會進來。</p>
+      <p className="muted">{s.lan_tv ? "已允許區網投放；服務重啟後生效。" : "目前僅限本機連線。"} 瀏覽器不會開啟原站廣告腳本。</p>
 
       <h2 className="h1" style={{ fontSize: 20, marginTop: 28 }}>外觀</h2>
       <p className="muted">先選一套模板，再用下面的色盤微調。</p>
@@ -91,7 +91,7 @@ export function SettingsPage() {
 
       <h2 className="h1" style={{ fontSize: 20, marginTop: 36 }}>投放到電視</h2>
       <p className="muted">
-        播放頁會有「投放這支影片」。電視需是 Chromecast／Google TV，與電腦同一 Wi-Fi。勾選後請重開 start.bat，並在防火牆放行 6970。選片在電腦上點，電視播當前這部；遙控器可暫停。
+        播放頁會有「投放這支影片」。支援 Chromecast／Google TV 與 LG／DLNA 電視，與電腦同一 Wi-Fi。變更後請重啟 Windows 工作排程器中的「Online Cinema Server」工作；使用手動啟動時再重開 start.bat，並在防火牆放行 6970。選片在電腦上點，電視播放選定內容；劇集可由伺服器接續播放，遙控器支援依電視而異。
       </p>
       <p>
         <label>
@@ -101,7 +101,7 @@ export function SettingsPage() {
             onChange={(e) =>
               void api.saveSettings({ lan_tv: e.target.checked }).then((n) => {
                 setS(n);
-                setMsg(e.target.checked ? "已開啟投放。請關閉視窗後再雙擊 start.bat。" : "已改回僅本機");
+                setMsg(e.target.checked ? "已開啟投放。請重啟「Online Cinema Server」工作；手動啟動時重開 start.bat。" : "已改回僅本機，重啟服務後生效。");
               })
             }
           />{" "}

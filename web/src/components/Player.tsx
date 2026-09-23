@@ -34,6 +34,7 @@ function saveVol(n: number) {
 
 export function Player({
   src,
+  episodeTitle,
   startAt = 0,
   onProgress,
   onEnded,
@@ -44,6 +45,7 @@ export function Player({
   onToggleFav,
 }: {
   src: string;
+  episodeTitle?: string;
   startAt?: number;
   onProgress?: (pos: number, dur: number) => void;
   onEnded?: () => void;
@@ -440,6 +442,7 @@ export function Player({
       {(casting ? remote?.busy || remote?.status?.buffering : loading) ? <div className="loading-pill">{casting ? "等待電視確認" : "載入中"}</div> : null}
       <div className="overlay">
         <div className="controls">
+          {episodeTitle ? <div className="current-episode" aria-live="polite">目前播放：{episodeTitle}</div> : null}
           <div
             className="seek"
             ref={barRef}

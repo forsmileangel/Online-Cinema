@@ -301,6 +301,7 @@ button.chip { font: inherit; }
 }
 .player.show .overlay, .player:hover .overlay { opacity: 1; }
 .controls { padding: 10px 16px 14px; pointer-events: auto; }
+.current-episode { margin-bottom: 4px; color: #fff; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
 .vol {
   display: flex; align-items: center; gap: 6px;
 }

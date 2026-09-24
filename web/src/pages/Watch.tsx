@@ -330,7 +330,7 @@ export function Watch() {
         <div className="player-wrap">
           <div className="player-screen">
             {!cast.restoring && playlist && !episodeError ? (
-              <Player key={`${activeEp}:${resolveAttempt}`} onError={playbackError} src={playlist} episodeTitle={currentEp?.title} startAt={startAt} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} />
+              <Player key={`${activeEp}:${resolveAttempt}`} onError={playbackError} src={playlist} startAt={startAt} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} />
             ) : (
               <div className="player">
                 <div className="empty">{episodeError ? "這一集無法播放" : `載入第${activeEp || ""}集…`}</div>
@@ -339,7 +339,7 @@ export function Watch() {
             )}
             {episodeError ? <p className="banner err" role="alert">{episodeError} <button className="btn" onClick={retryEpisode}>重試這一集</button></p> : null}
           </div>
-          <CastBar controller={cast} />
+          <CastBar controller={cast} currentEpisode={currentEp?.title} />
         </div>
         {manyEps ? (
           <aside className="ep-rail" aria-label="選集">

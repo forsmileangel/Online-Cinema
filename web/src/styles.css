@@ -301,7 +301,6 @@ button.chip { font: inherit; }
 }
 .player.show .overlay, .player:hover .overlay { opacity: 1; }
 .controls { padding: 10px 16px 14px; pointer-events: auto; }
-.current-episode { margin-bottom: 4px; color: #fff; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
 .vol {
   display: flex; align-items: center; gap: 6px;
 }
@@ -457,6 +456,7 @@ select.field, .field {
   background: var(--card);
 }
 .cast-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cast-current-episode { margin-left: auto; color: var(--text); font-size: 13px; font-weight: 600; white-space: nowrap; }
 .cast-target { flex: 1; min-width: 130px; max-width: 300px; }
 .cast-bar .btn { padding: 8px 12px; white-space: nowrap; }
 .cast-status { margin: 8px 0 0; font-size: 13px; line-height: 1.4; color: var(--muted); overflow-wrap: anywhere; }
@@ -486,5 +486,6 @@ select.field, .field {
   .player-wrap { --player-max: max(100px, calc(100dvh - var(--bar) - 210px)); }
   .cast-bar { padding: 8px; }
   .cast-actions { gap: 6px; }
+  .cast-current-episode { font-size: 12px; }
   .cast-target { max-width: none; }
 }

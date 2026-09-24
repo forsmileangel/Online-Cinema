@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import type { CastingController } from "../hooks/useCasting";
 
-export function CastBar({ controller }: { controller: CastingController }) {
+export function CastBar({ controller, currentEpisode }: { controller: CastingController; currentEpisode?: string }) {
   const { devices, selected, setSelected, busy, active, status, msg, uncertain, canControl,
     scan, play, control, returnToLocal } = controller;
   const device = devices.find((d) => d.uuid === selected);
@@ -28,6 +28,7 @@ export function CastBar({ controller }: { controller: CastingController }) {
           {status?.phase === "error" ? <button className="btn alt" disabled={busy} onClick={() => void controller.retry()}>重試這一集</button> : null}
           {uncertain || status?.idle || status?.phase === "stopped" || status?.phase === "ended" ? <button className="btn alt" type="button" disabled={busy} onClick={() => void returnToLocal()}>我已用遙控器停止，回本機</button> : null}
         </> : null}
+        {currentEpisode ? <span className="cast-current-episode" aria-live="polite">目前播放：{currentEpisode}</span> : null}
       </div>
       {device ? <details><summary>電視喚醒設定</summary><p>LG 需開啟「行動裝置開啟電視／透過 Wi-Fi 開啟電視」。首次請開機掃描；若無法自動記錄，填入電視目前使用的網路 MAC 位址。</p>
         <input className="field" aria-label="電視 MAC 位址" value={mac} maxLength={17} placeholder="10:20:30:40:50:60" onChange={(e) => setMac(e.target.value)} />

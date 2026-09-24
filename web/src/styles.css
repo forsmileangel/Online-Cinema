@@ -108,18 +108,28 @@ button { cursor: pointer; }
 
 .card {
   width: 230px; flex: 0 0 230px; scroll-snap-align: start;
-  color: inherit;
+  color: inherit; display: block;
 }
 .grid .card { width: auto; flex: none; }
+.poster-shell { position: relative; }
+.poster-link, .card-title-link { display: block; color: inherit; }
 .poster {
   position: relative; aspect-ratio: 16/9; border-radius: 12px;
-  overflow: hidden; background: #222; box-shadow: var(--shadow);
+  overflow: hidden; background: #000; box-shadow: var(--shadow);
 }
 .poster img {
-  width: 100%; height: 100%; object-fit: cover;
-  transition: transform 0.25s ease;
+  width: 100%; height: 100%; object-fit: contain; object-position: center;
 }
-.card:hover .poster img { transform: scale(1.05); }
+.poster-placeholder {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  padding: 12px; color: var(--muted); font-size: 13px; text-align: center;
+  background: #111;
+}
+.poster-retry {
+  position: absolute; z-index: 2; left: 50%; bottom: 12px;
+  transform: translateX(-50%); white-space: nowrap;
+  padding: 6px 12px; font-size: 12px;
+}
 .poster .dur, .poster .play {
   position: absolute; color: #fff; font-size: 12px;
 }

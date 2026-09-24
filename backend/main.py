@@ -444,6 +444,22 @@ def tv_rotate():
     return {"tv_code": tv_session.rotate_code()}
 
 
+def _detect_image_media_type(data: bytes) -> str:
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    if len(data) >= 12 and data[4:8] == b"ftyp" and any(brand in data[8:32] for brand in (b"avif", b"avis")):
+        return "image/avif"
+    if data.startswith(b"BM"):
+        return "image/bmp"
+    return ""
+
+
 @app.get("/api/img")
 def image_proxy(u: str = Query(..., max_length=500)):
     try:
@@ -473,9 +489,9 @@ def image_proxy(u: str = Query(..., max_length=500)):
             http_client.close_response(r)
         if len(data) > 8_000_000:
             raise UnsafeURL("image too large")
-        ctype = (r.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
-        if not ctype.startswith("image/"):
-            ctype = "image/jpeg"
+        ctype = _detect_image_media_type(data)
+        if not ctype:
+            raise ValueError("upstream response is not a supported image")
         return Response(content=data, media_type=ctype, headers={"Cache-Control": "private, max-age=86400"})
     except Exception as e:
         raise _err(e) from e

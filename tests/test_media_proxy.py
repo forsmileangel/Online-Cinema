@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import quote
 
+from fastapi import HTTPException
 from fastapi.responses import Response, StreamingResponse
 from starlette.requests import Request
 
@@ -26,6 +27,27 @@ class MediaProxyTests(unittest.TestCase):
             p = patch.object(obj, name, **kwargs)
             p.start()
             self.addCleanup(p.stop)
+
+    def test_image_proxy_uses_image_bytes_not_upstream_content_type(self):
+        url = "https://picbf.com/poster"
+        jpeg = b"\xff\xd8\xff" + b"poster-bytes"
+        response = Mock(content=jpeg, headers={"content-type": "text/html"})
+        with patch.object(main, "assert_image_url", side_effect=lambda value: value), patch.object(
+            http_client, "fetch_bytes", return_value=response
+        ):
+            image = main.image_proxy(url)
+        self.assertEqual(image.media_type, "image/jpeg")
+        self.assertEqual(image.body, jpeg)
+        response.close.assert_called_once()
+
+        html_response = Mock(content=b"<!doctype html><title>blocked</title>", headers={"content-type": "image/jpeg"})
+        with patch.object(main, "assert_image_url", side_effect=lambda value: value), patch.object(
+            http_client, "fetch_bytes", return_value=html_response
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                main.image_proxy(url)
+        self.assertEqual(raised.exception.status_code, 502)
+        html_response.close.assert_called_once()
 
     def test_all_sources_use_the_same_proxy_with_correct_referer(self):
         cases = [("hongguo", "s2.bfllvip.com", "https://www.hongguoapp.cn/"),

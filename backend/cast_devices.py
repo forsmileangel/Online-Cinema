@@ -1,4 +1,4 @@
-"""Known receivers survive standby. Wake is an explicit user action only."""
+"""Known receivers survive standby; only DLNA TVs use Wake-on-LAN."""
 from __future__ import annotations
 
 import ctypes
@@ -63,7 +63,7 @@ def remember(devices):
             mac = old.get("mac", "") or learn_mac(device["host"])
             saved[device["uuid"]] = {**old, **device, "mac": mac}
         db.set_setting("known_cast_devices", json.dumps(saved, ensure_ascii=False))
-        return [{**d, "online": key in online, "can_wake": bool(d.get("mac")) and not d.get("manual_power_on", False)} for key, d in saved.items()]
+        return [{**d, "online": key in online, "can_wake": d.get("kind") == "dlna" and bool(d.get("mac")) and not d.get("manual_power_on", False)} for key, d in saved.items()]
 
 
 def configure(uuid, mac):
@@ -85,6 +85,12 @@ def wake_and_wait(uuid, valid, timeout=60):
     device = known(uuid)
     if device and device.get("manual_power_on"):
         raise ValueError("這台電視需手動開機。請先用遙控器開機，再按「掃描電視」後投放。")
+    if device and device.get("kind") == "chromecast":
+        # Legacy clients may still send wake=true. Cast LOAD launches the
+        # receiver (and HDMI-CEC); sending a MAC magic packet cannot do that.
+        if not valid():
+            raise RuntimeError("喚醒已取消")
+        return
     if not device or not device.get("mac"):
         raise ValueError("尚未記住電視 MAC 位址，請先開機掃描或輸入 MAC")
     host = device["host"]

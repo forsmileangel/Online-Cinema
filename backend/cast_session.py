@@ -128,7 +128,7 @@ class PlaybackSession:
     def _load(self, episode: str, position=0):
         if not self.valid():
             return
-        self.publish(phase="loading", error="", playing=False, paused=False, idle=False, buffering=False,
+        self.publish(phase="loading", error="", warning="", playing=False, paused=False, idle=False, buffering=False,
                      episode_id=episode, current_time=position, duration=0, playlist="")
         self.previous = None
         self.epoch += 1

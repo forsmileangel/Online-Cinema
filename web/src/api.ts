@@ -12,7 +12,7 @@ export type CastStatus = {
   warning?: string;
 };
 
-export type CastDevice = { uuid: string; name: string; host: string; kind: string; online: boolean; mac: string; can_wake: boolean; location?: string; manual_power_on?: boolean };
+export type CastDevice = { uuid: string; name: string; host: string; kind: string; online: boolean; mac: string; can_wake: boolean; model?: string; location?: string; manual_power_on?: boolean };
 export type CastSession = CastStatus & {
   session_id: string; phase: string; error: string; pending_action: string;
   source: string; video_id: string; episode_id: string; autoplay_next: boolean; playlist: string;

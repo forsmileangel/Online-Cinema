@@ -214,9 +214,21 @@ hevc/video.m3u8
         response = asyncio.run(main.media_cors(req, AsyncMock(return_value=Response())))
         self.assertNotIn("access-control-allow-origin", response.headers)
 
+    def test_cast_private_network_preflight_is_limited_to_enabled_lan_media(self):
+        for client, enabled, expected in [("192.168.1.26", "1", 204), ("192.168.1.26", "", 403), ("8.8.8.8", "1", 403)]:
+            with self.subTest(client=client, enabled=enabled), patch.object(main.db, "get_setting", return_value=enabled):
+                req = request("OPTIONS", {"Origin": "https://www.gstatic.com", "Access-Control-Request-Private-Network": "true"})
+                req.scope["client"] = (client, 1234)
+                response = asyncio.run(main.media_cors(req, AsyncMock()))
+                self.assertEqual(response.status_code, expected)
+                self.assertEqual(response.headers.get("access-control-allow-private-network"), "true" if expected == 204 else None)
+        req.scope["path"] = "/api/settings"
+        response = asyncio.run(main.media_cors(req, AsyncMock(return_value=Response())))
+        self.assertNotIn("access-control-allow-private-network", response.headers)
+
     def test_cast_uses_decoded_upstream_path_for_mime_and_selected_route(self):
         url = "https://surrit.com/master.m3u8?label=.mp4"
-        with patch.object(main.db, "get_setting", return_value="1"), patch.object(main, "assert_hls_url", side_effect=lambda u: u), patch.object(main.chromecast, "lan_media_origin", return_value="http://192.168.1.10:6969") as origin, patch.object(main.chromecast, "check_media_origin"), patch.object(main.chromecast, "play", return_value={}) as play:
+        with patch.object(main.db, "get_setting", return_value="1"), patch.object(main.cast_session, "cancel"), patch.object(main, "assert_hls_url", side_effect=lambda u: u), patch.object(main.chromecast, "lan_media_origin", return_value="http://192.168.1.10:6969") as origin, patch.object(main.chromecast, "check_media_origin"), patch.object(main.chromecast, "play", return_value={}) as play:
             main.cast_play(CastPlayIn(url="/api/hls?u=" + quote(url, safe=""), uuid="lg"))
         origin.assert_called_once_with("lg")
         self.assertEqual(play.call_args.args[1], "application/vnd.apple.mpegurl")

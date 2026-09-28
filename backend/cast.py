@@ -66,6 +66,11 @@ def _serialize_cast_writes(device) -> None:
     client.send_message = serialized
 
 
+def _reusable_cast(device) -> bool:
+    client = device.socket_client
+    return not client.is_stopped and (client.ident is None or client.is_alive())
+
+
 def discover(timeout: float = 6) -> list[dict]:
     global _browsers, _casts
     with _lock, ThreadPoolExecutor(max_workers=2) as pool:
@@ -76,12 +81,15 @@ def discover(timeout: float = 6) -> list[dict]:
         found = {}
         for cast in chromecasts:
             uuid = str(cast.uuid)
-            if uuid in _casts:
+            old = _casts.get(uuid)
+            if old is not None and _reusable_cast(old):
                 # Discovery objects have not started their socket thread.
                 # Chromecast.disconnect() joins that thread and raises here.
                 cast.socket_client.disconnect()
-                cast = _casts[uuid]
+                cast = old
             else:
+                if old is not None:
+                    old.socket_client.disconnect()
                 _browsers[uuid] = browser
             _serialize_cast_writes(cast)
             found[uuid] = cast
@@ -98,7 +106,8 @@ def discover(timeout: float = 6) -> list[dict]:
         for unused in (previous_browsers | {browser}) - set(_browsers.values()):
             unused.stop_discovery()
         devices = [{"uuid": uuid, "name": d.name if isinstance(d, dlna.Renderer) else d.cast_info.friendly_name,
-                 "host": _host(d), "kind": "dlna" if isinstance(d, dlna.Renderer) else "chromecast"}
+                 "host": _host(d), "kind": "dlna" if isinstance(d, dlna.Renderer) else "chromecast",
+                 "model": "" if isinstance(d, dlna.Renderer) else getattr(d.cast_info, "model_name", "")}
                 for uuid, d in found.items()]
         from . import cast_devices
         return cast_devices.remember(devices)
@@ -123,27 +132,49 @@ def _host(device) -> str:
 
 
 def _cast(uuid: str = "", deadline: float | None = None):
+    from pychromecast.error import NotConnected, PyChromecastStopped, RequestTimeout
+
     uuid = uuid or selected_uuid()
     if not uuid:
         raise RuntimeError("請先選一台電視")
-    acquired = _lock.acquire() if deadline is None else _lock.acquire(timeout=_remaining(deadline, "等待裝置搜尋"))
-    if not acquired:
+    deadline = deadline if deadline is not None else time.monotonic() + 20
+    if not _lock.acquire(timeout=_remaining(deadline, "等待裝置搜尋")):
         raise TimeoutError("裝置搜尋尚未結束，請稍後重試")
     try:
-        cast = _casts.get(uuid)
+        for attempt in range(2):
+            cast = _casts.get(uuid)
+            if cast is None or (not isinstance(cast, dlna.Renderer) and not _reusable_cast(cast)):
+                discover(timeout=_remaining(deadline, "搜尋", 5))
+                cast = _casts.get(uuid)
+            if cast is None:
+                raise ReceiverUnavailable("無法連到已選裝置，請確認電源與 Wi-Fi 後重試")
+            if isinstance(cast, dlna.Renderer):
+                return uuid, cast
+            try:
+                if not _reusable_cast(cast):
+                    raise ReceiverUnavailable("投放連線已中斷")
+                cast.wait(timeout=_remaining(deadline, "連線", 8))
+                # wait() can return an old status even after the socket dies.
+                # Receiver GET_STATUS also works in standby, without a media app.
+                received = threading.Event()
+                result = []
+                def ready(ok, _data, result=result, received=received):
+                    result.append(ok)
+                    received.set()
+                cast.socket_client.receiver_controller.update_status(callback_function=ready)
+                if not received.wait(_remaining(deadline, "確認連線", 4)) or not result[0]:
+                    raise ReceiverUnavailable("未收到投放裝置回應")
+                return uuid, cast
+            except (NotConnected, PyChromecastStopped, RequestTimeout, ReceiverUnavailable) as e:
+                cast.socket_client.disconnect()
+                _casts.pop(uuid, None)
+                browser = _browsers.pop(uuid, None)
+                if browser is not None and browser not in _browsers.values():
+                    browser.stop_discovery()
+                if attempt:
+                    raise ReceiverUnavailable("投放裝置重新連線失敗，請確認電源與 Wi-Fi 後重試") from e
     finally:
         _lock.release()
-    if cast is None and deadline is not None:
-        raise RuntimeError("找不到這台電視，請重新掃描後投放")
-    if cast is None:
-        discover(timeout=5)
-        with _lock:
-            cast = _casts.get(uuid)
-    if cast is None:
-        raise RuntimeError("找不到已選的電視，請開啟電視後再掃描")
-    if not isinstance(cast, dlna.Renderer):
-        cast.wait(timeout=8 if deadline is None else _remaining(deadline, "連線", 8))
-    return uuid, cast
 
 
 def lan_media_origin(uuid: str = "") -> str:
@@ -267,8 +298,12 @@ def play(content_id: str, content_type: str, title: str, position: float = 0, uu
     deadline = time.monotonic() + CONFIRM_TIMEOUT
     with _operation(deadline):
         uuid, cast = _cast(uuid, deadline)
+        nesthub = not isinstance(cast, dlna.Renderer) and any(
+            name in str(cast.cast_info.model_name).lower() for name in ("nest hub", "google home hub"))
         if isinstance(cast, dlna.Renderer) and content_type == "application/vnd.apple.mpegurl":
             content_id = hls_proxy.dlna_media_url(content_id, deadline)
+        elif nesthub and content_type == "application/vnd.apple.mpegurl":
+            content_id = hls_proxy.nesthub_media_url(content_id, deadline)
         if guard and not guard():
             raise RuntimeError("投放已取消")
         if expected:
@@ -295,6 +330,8 @@ def play(content_id: str, content_type: str, title: str, position: float = 0, uu
             cast.media_controller.play_media(content_id, content_type, title=title or "線上電影院",
                                               current_time=float(position), autoplay=True, stream_type="BUFFERED")
         state = _confirm(uuid, cast, content_id, "play", deadline=deadline, require_progress=True)
+        if nesthub and parse_qs(urlparse(content_id).query).get("nesthub") == ["1"]:
+            state["warning"] = "Nest Hub 已使用 720p 相容模式播放"
         if isinstance(cast, dlna.Renderer) and position > 0:
             try:
                 cast.control("seek", position, deadline=deadline)

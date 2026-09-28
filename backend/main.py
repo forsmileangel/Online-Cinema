@@ -93,7 +93,13 @@ async def media_cors(request: Request, call_next):
     if request.url.path != "/api/hls":
         return await call_next(request)
     if request.method == "OPTIONS":
+        client = request.client.host if request.client else "127.0.0.1"
+        if not lan.is_allowed_client(client) or (not lan.is_loopback(client) and db.get_setting("lan_tv", "") != "1"):
+            return Response(status_code=403)
         response = Response(status_code=204)
+        # Cast receivers request private-network access before fetching media.
+        if request.headers.get("access-control-request-private-network") == "true":
+            response.headers["Access-Control-Allow-Private-Network"] = "true"
     else:
         response = await call_next(request)
     response.headers.update({

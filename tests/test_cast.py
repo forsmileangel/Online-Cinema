@@ -35,6 +35,7 @@ class CastTests(unittest.TestCase):
 
     def test_scan_preserves_an_active_chromecast_connection(self):
         old = Mock(uuid="cc", cast_info=SimpleNamespace(host="192.168.1.4", friendly_name="Living room"))
+        old.socket_client.is_stopped = False
         new = Mock(uuid="cc")
         cast._casts["cc"] = old
         cast._active["cc"] = "http://lan/video"
@@ -92,6 +93,7 @@ class CastTests(unittest.TestCase):
 
     def test_rescan_keeps_the_discovery_service_needed_for_reconnection(self):
         old = Mock(uuid="cc", cast_info=SimpleNamespace(host="192.168.1.4", friendly_name="Living room"))
+        old.socket_client.is_stopped = False
         old_browser, new_browser = Mock(), Mock()
         cast._casts["cc"] = old
         cast._browsers["cc"] = old_browser

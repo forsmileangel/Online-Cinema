@@ -404,11 +404,20 @@ select.field, .field {
 }
 
 @media (max-width: 720px) {
+  :root { --bar: 104px; }
+  .topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding: 10px 14px; }
+  .brand { grid-column: 1; grid-row: 1; white-space: nowrap; }
+  .nav { grid-column: 2; grid-row: 1; gap: 0; white-space: nowrap; }
+  .nav a { padding: 6px 7px; }
+  .search { grid-column: 1; grid-row: 2; min-width: 0; max-width: none; }
+  .search input { min-width: 0; width: 100%; padding: 8px 12px; }
+  .topbar .src-select { grid-column: 2; grid-row: 2; }
+  .topbar .src-select .hide-sm { display: none; }
+  .topbar .src-select select { min-width: 0; width: 100%; }
   .page { padding: 16px 14px 70px; }
   .scroller .card { width: 170px; flex-basis: 170px; }
   .grid.large { grid-template-columns: 1fr; }
   .nav .hide-sm { display: none; }
-  .search { max-width: none; }
 }
 
 .theme-grid {

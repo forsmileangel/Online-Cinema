@@ -55,7 +55,7 @@ export function TopBar() {
         </NavLink>
         <NavLink to={`${prefix}/favorites`}>收藏</NavLink>
         {tv ? null : (
-          <NavLink to="/settings" className="hide-sm">
+          <NavLink to="/settings">
             設定
           </NavLink>
         )}

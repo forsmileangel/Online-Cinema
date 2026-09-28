@@ -319,6 +319,7 @@ def get_settings():
         source=catalog.current_source(),
         theme=db.get_setting("theme", ""),
         lan_tv=lan_on,
+        in_kaohsiung=db.get_setting("in_kaohsiung", "") == "1",
         lan_ips=ips,
         tv_code=code if lan_on else "",
         tv_url=tv_url,
@@ -337,6 +338,8 @@ def put_settings(body: SettingsIn):
             db.set_setting("lan_tv", "1" if body.lan_tv else "0")
             if body.lan_tv:
                 tv_session.ensure_code()
+        if body.in_kaohsiung is not None:
+            db.set_setting("in_kaohsiung", "1" if body.in_kaohsiung else "0")
         return get_settings()
     except Exception as e:
         raise _err(e) from e
@@ -346,7 +349,11 @@ def put_settings(body: SettingsIn):
 def cast_devices():
     try:
         devices = chromecast.discover()
-        return {"devices": devices, "selected": chromecast.selected_uuid(), "origin": chromecast.lan_media_origin()}
+        in_kaohsiung = db.get_setting("in_kaohsiung", "") == "1"
+        devices = [d for d in devices if d.get("location") != "kaohsiung" or in_kaohsiung]
+        selected = chromecast.selected_uuid()
+        return {"devices": devices, "selected": selected if known_devices.available(selected) else "", "origin": chromecast.lan_media_origin(),
+                "in_kaohsiung": in_kaohsiung}
     except Exception as e:
         raise HTTPException(502, f"掃描電視失敗：{e}") from e
 
@@ -364,6 +371,8 @@ def cast_select(body: CastSelectIn):
 def cast_play(body: CastPlayIn):
     if db.get_setting("lan_tv", "") != "1":
         raise HTTPException(400, "請先在設定開啟「允許投放」，然後重開 start.bat")
+    if not known_devices.available(body.uuid or chromecast.selected_uuid()):
+        raise HTTPException(400, "請先勾選「我在高雄」再投放到高雄電視")
     if body.managed:
         try:
             uuid = body.uuid or chromecast.selected_uuid()

@@ -27,6 +27,11 @@ def known(uuid):
     return records().get(uuid)
 
 
+def available(uuid):
+    device = known(uuid) or {}
+    return device.get("location") != "kaohsiung" or db.get_setting("in_kaohsiung", "") == "1"
+
+
 def normalize_mac(value):
     raw = re.sub(r"[:-]", "", value.strip()).upper()
     if not re.fullmatch(r"[0-9A-F]{12}", raw) or int(raw[:2], 16) & 1 or raw == "0" * 12:
@@ -56,9 +61,9 @@ def remember(devices):
         for device in devices:
             old = saved.get(device["uuid"], {})
             mac = old.get("mac", "") or learn_mac(device["host"])
-            saved[device["uuid"]] = {**device, "mac": mac}
+            saved[device["uuid"]] = {**old, **device, "mac": mac}
         db.set_setting("known_cast_devices", json.dumps(saved, ensure_ascii=False))
-        return [{**d, "online": key in online, "can_wake": bool(d.get("mac"))} for key, d in saved.items()]
+        return [{**d, "online": key in online, "can_wake": bool(d.get("mac")) and not d.get("manual_power_on", False)} for key, d in saved.items()]
 
 
 def configure(uuid, mac):
@@ -78,6 +83,8 @@ def magic_packet(mac):
 def wake_and_wait(uuid, valid, timeout=60):
     from . import cast
     device = known(uuid)
+    if device and device.get("manual_power_on"):
+        raise ValueError("這台電視需手動開機。請先用遙控器開機，再按「掃描電視」後投放。")
     if not device or not device.get("mac"):
         raise ValueError("尚未記住電視 MAC 位址，請先開機掃描或輸入 MAC")
     host = device["host"]
@@ -106,4 +113,4 @@ def wake_and_wait(uuid, valid, timeout=60):
         time.sleep(min(1, max(0, deadline - time.monotonic())))
     if not valid():
         raise RuntimeError("喚醒已取消")
-    raise TimeoutError("電視未回應喚醒；請確認 LG 已開啟「透過 Wi-Fi 開啟電視／行動裝置開啟電視」，且待機時仍連接網路")
+    raise TimeoutError("已送出網路喚醒訊號，但電視未回應。請先用遙控器開機，再按「掃描電視」後投放；記住 MAC 不代表機型支援喚醒，請確認電視是否提供並已開啟網路待機設定。")

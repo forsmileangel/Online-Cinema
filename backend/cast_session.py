@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import queue
 import threading
 import time
@@ -40,6 +41,8 @@ class PlaybackSession:
         self.episode_ids: list[str] = []
         self.epoch = 0
         self.last_saved = 0.0
+        self.last_checkpoint = 0.0
+        self.checkpoint_state = None
         self.prefetched = None
         self.prefetching = False
         self.snapshot = dict(uuid=self.uuid, session_id=self.id, content_id="", playing=False, paused=False,
@@ -56,6 +59,26 @@ class PlaybackSession:
         with self.lock:
             if not self.cancelled.is_set():
                 self.snapshot.update(values)
+        self.checkpoint()
+
+    def checkpoint(self):
+        # Only the registered owner may save; cancelled workers cannot revive it.
+        with _lock:
+            if _sessions.get(self.uuid) is not self or self.cancelled.is_set():
+                return
+            snapshot = self.get()
+            phase = snapshot["phase"]
+            if phase in {"loading", "waking", "reconnecting"}:
+                return
+            state = (phase, snapshot["content_id"], snapshot["episode_id"], snapshot["autoplay_next"])
+            now = time.monotonic()
+            if state == self.checkpoint_state and now - self.last_checkpoint < 5:
+                return
+            saved = "" if phase in {"stopped", "ended", "replaced"} else json.dumps({
+                "body": self.body, "snapshot": snapshot, "episode_ids": self.episode_ids, "epoch": self.epoch,
+            }, ensure_ascii=False)
+            db.set_setting("cast_session:" + self.uuid, saved)
+            self.last_checkpoint, self.checkpoint_state = now, state
 
     def valid(self):
         return not self.cancelled.is_set() and not self.stop_requested.is_set()
@@ -217,14 +240,19 @@ class PlaybackSession:
         self.previous = state
         self.publish(**state, phase="stopped" if action == "stop" else "paused" if state.get("paused") else "playing", error="")
 
-    def run(self):
+    def run(self, reconnect=False):
         failures = 0
         try:
-            if self.body.get("wake"):
-                from .cast_devices import wake_and_wait
-                wake_and_wait(self.uuid, self.valid)
-            if self.valid():
-                self.load(self.body.get("episode_id", ""), self.body.get("position_sec", 0))
+            if reconnect:
+                state = cast.reconnect(self.uuid, self.snapshot["content_id"], self.id, self.snapshot["title"])
+                self.previous = state
+                self.publish(**state, phase="paused" if state["paused"] else "buffering" if state["buffering"] else "playing", error="")
+            else:
+                if self.body.get("wake"):
+                    from .cast_devices import wake_and_wait
+                    wake_and_wait(self.uuid, self.valid)
+                if self.valid():
+                    self.load(self.body.get("episode_id", ""), self.body.get("position_sec", 0))
         except Exception as e:
             self.publish(phase="error", error=str(e), playing=False, paused=False)
         while not self.cancelled.is_set():
@@ -265,17 +293,40 @@ def start(body: dict):
         if previous:
             previous.cancelled.set()
         _sessions[session.uuid] = session
+        db.set_setting("cast_session:" + session.uuid, "")
     threading.Thread(target=session.run, name="cast-session", daemon=True).start()
     return session.get()
 
 
 def get(uuid: str):
+    restored = False
     with _lock:
         session = _sessions.get(uuid)
-    return session.get() if session else None
+        if not session:
+            saved = db.get_setting("cast_session:" + uuid, "")
+            if not saved:
+                return None
+            try:
+                saved = json.loads(saved)
+                session = PlaybackSession(saved["body"])
+                session.snapshot.update(saved["snapshot"])
+                if session.uuid != uuid or not session.snapshot["content_id"] or session.snapshot["phase"] in {"stopped", "ended", "replaced"}:
+                    return None
+                session.id = session.snapshot["session_id"]
+                session.episode_ids = saved["episode_ids"]
+                session.epoch = saved["epoch"]
+            except (ValueError, KeyError, TypeError):
+                return None
+            session.snapshot.update(phase="reconnecting", pending_action="", error="")
+            _sessions[uuid] = session
+            restored = True
+    if restored:
+        threading.Thread(target=session.run, kwargs={"reconnect": True}, name="cast-reconnect", daemon=True).start()
+    return session.get()
 
 
 def control(uuid: str, session_id: str, action: str, **values):
+    get(uuid)
     with _lock:
         session = _sessions.get(uuid)
     if not session or session.id != session_id:
@@ -286,5 +337,6 @@ def control(uuid: str, session_id: str, action: str, **values):
 def cancel(uuid: str):
     with _lock:
         session = _sessions.pop(uuid, None)
+        db.set_setting("cast_session:" + uuid, "")
     if session:
         session.cancelled.set()

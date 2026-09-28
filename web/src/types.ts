@@ -59,6 +59,7 @@ export type Settings = {
   source?: string;
   theme?: string;
   lan_tv?: boolean;
+  in_kaohsiung?: boolean;
   lan_ips?: string[];
   tv_code?: string;
   tv_url?: string;

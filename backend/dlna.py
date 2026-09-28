@@ -1,4 +1,4 @@
-"""LG / DLNA media renderer discovery and AVTransport control."""
+"""DLNA media renderer discovery and AVTransport control."""
 
 from __future__ import annotations
 
@@ -27,13 +27,13 @@ class ActionError(RuntimeError):
         self.action = action
         self.stage = stage
         context = "／".join(part for part in (stage, action) if part)
-        super().__init__(f"LG 電視拒絕操作{f'（{context}，代碼 {code}）' if context else f'（代碼 {code}）'}：{description}")
+        super().__init__(f"DLNA 電視拒絕操作{f'（{context}，代碼 {code}）' if context else f'（代碼 {code}）'}：{description}")
 
 
 def remaining(deadline: float | None, stage: str, limit: float = 30) -> float:
     left = limit if deadline is None else deadline - time.monotonic()
     if left <= 0:
-        raise TimeoutError(f"LG {stage}逾時，電視尚未確認操作，請重試或停止投放")
+        raise TimeoutError(f"DLNA {stage}逾時，電視尚未確認操作，請重試或停止投放")
     return min(left, limit)
 
 
@@ -92,10 +92,10 @@ class Renderer:
                 "Content-Type": 'text/xml; charset="utf-8"', "SOAPAction": f'"{AV_TRANSPORT}#{action}"',
             }), timeout=remaining(deadline, stage or action, 15 if action in ("SetAVTransportURI", "Play") else 4))
         except ActionError as e:
-            _log.warning("LG rejected operation: stage=%s action=%s code=%s description=%s", stage, action, e.code, e.description)
+            _log.warning("DLNA rejected operation: stage=%s action=%s code=%s description=%s", stage, action, e.code, e.description)
             raise ActionError(e.code, e.description, action, stage) from e
         except (OSError, ET.ParseError) as e:
-            raise RuntimeError(f"LG {stage or '讀取電視'}失敗（{action}）：{e}") from e
+            raise RuntimeError(f"DLNA {stage or '讀取電視'}失敗（{action}）：{e}") from e
 
     def _transport(self, deadline: float, stage: str) -> str:
         while True:

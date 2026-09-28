@@ -9,6 +9,7 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
 }) {
   const [devices, setDevices] = useState<CastDevice[]>([]);
   const [selected, setSelected] = useState("");
+  const [inKaohsiung, setInKaohsiung] = useState(false);
   const [requesting, setRequesting] = useState(false);
   const [restoring, setRestoring] = useState(true);
   const [active, setActive] = useState<{ uuid: string; session_id: string } | null>(null);
@@ -26,22 +27,29 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
     setUncertain(!!next.error || next.phase === "error" || next.phase === "replaced");
     if (next.playing || next.paused) lastPosition.current = next.current_time;
     callbacks.current.onEpisode(next.episode_id, next.playlist, next.autoplay_next);
-    const labels: Record<string, string> = { waking: "正在喚醒電視，最多等待 60 秒…", loading: "正在載入，等待電視確認播放…",
+    const labels: Record<string, string> = { reconnecting: "正在重新連接電視，確認原本的播放進度…", waking: "正在喚醒電視，最多等待 60 秒…", loading: "正在載入，等待電視確認播放…",
       playing: "電視已確認播放，本機保持暫停。關閉網頁後仍可自動連播。", paused: "電視已確認暫停", ended: "已播放完畢", stopped: "電視已停止" };
     const pendingLabel = next.pending_action === "stop" ? "正在停止投放，等待電視回應…"
       : next.pending_action === "episode" ? "正在換集，確認片源與電視狀態中…" : "";
     setMsg(next.error || pendingLabel || next.warning || labels[next.phase] || "等待電視回應…");
   }
 
-  async function scan() {
+  async function scan(inKaohsiung?: boolean) {
     if (pending.current) return;
     pending.current = true; setRequesting(true);
     const version = generation.current;
     try {
+      if (inKaohsiung !== undefined) {
+        const saved = await api.saveSettings({ in_kaohsiung: inKaohsiung });
+        if (version !== generation.current) return;
+        setInKaohsiung(!!saved.in_kaohsiung);
+        setDevices([]); setSelected("");
+      }
       const next = await api.castDevices();
       if (version !== generation.current) return;
       setDevices(next.devices);
-      setSelected((old) => old || next.selected || next.devices[0]?.uuid || "");
+      setInKaohsiung(next.in_kaohsiung);
+      setSelected((old) => [old, next.selected].find((uuid) => next.devices.some((d) => d.uuid === uuid)) || next.devices[0]?.uuid || "");
       if (!next.devices.length) setMsg("沒找到電視，請先開機並確認位於同一 Wi-Fi。");
     } catch (e) { if (version === generation.current) setMsg(e instanceof Error ? e.message : "掃描失敗"); }
     finally { if (version === generation.current) { pending.current = false; setRequesting(false); } }
@@ -84,7 +92,7 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
     return () => { cancelled = true; clearTimeout(timer); controller.abort(); };
   }, [active]);
 
-  const busy = requesting || !!status?.pending_action || status?.phase === "waking" || status?.phase === "loading";
+  const busy = requesting || !!status?.pending_action || status?.phase === "waking" || status?.phase === "loading" || status?.phase === "reconnecting";
   const canControl = !!active && !!status && (status.playing || status.paused) && !busy && !uncertain;
   const canSeek = canControl && status!.duration > 0;
 
@@ -134,7 +142,7 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
     catch (e) { setMsg(e instanceof Error ? e.message : "儲存失敗"); }
   }
 
-  return { canPlay: !!playlist, devices, selected, setSelected, busy, restoring, active, status, msg, uncertain, canControl, canSeek, scan, play, control, returnToLocal,
+  return { canPlay: !!playlist, devices, selected, setSelected, inKaohsiung, setInKaohsiung: (enabled: boolean) => scan(enabled), busy, restoring, active, status, msg, uncertain, canControl, canSeek, scan, play, control, returnToLocal,
     episode: (episode_id: string) => command("episode", { episode_id }),
     autoplay: (autoplay_next: boolean) => command("autoplay", { autoplay_next }), retry: () => command("retry"), saveMac };
 }

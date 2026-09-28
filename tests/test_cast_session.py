@@ -13,6 +13,11 @@ def state(**values):
 
 
 class SessionTests(unittest.TestCase):
+    def setUp(self):
+        save = patch.object(db, "set_setting")
+        save.start()
+        self.addCleanup(save.stop)
+
     def session(self):
         session = cast_session.PlaybackSession(dict(uuid="tv", source="hongguo", video_id="123", episode_id="1", autoplay_next=True))
         session.previous = state()

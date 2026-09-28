@@ -12,7 +12,7 @@ export type CastStatus = {
   warning?: string;
 };
 
-export type CastDevice = { uuid: string; name: string; host: string; kind: string; online: boolean; mac: string; can_wake: boolean };
+export type CastDevice = { uuid: string; name: string; host: string; kind: string; online: boolean; mac: string; can_wake: boolean; location?: string; manual_power_on?: boolean };
 export type CastSession = CastStatus & {
   session_id: string; phase: string; error: string; pending_action: string;
   source: string; video_id: string; episode_id: string; autoplay_next: boolean; playlist: string;
@@ -99,12 +99,13 @@ export const api = {
     source?: string;
     theme?: string;
     lan_tv?: boolean;
+    in_kaohsiung?: boolean;
   }) => req<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(body) }),
   tvPair: (code: string) =>
     req<{ ok: boolean }>("/api/tv/pair", { method: "POST", body: JSON.stringify({ code }) }),
   tvRotate: () => req<{ tv_code: string }>("/api/tv/rotate", { method: "POST" }),
   castDevices: (signal?: AbortSignal) =>
-    req<{ devices: CastDevice[]; selected: string; origin: string }>(
+    req<{ devices: CastDevice[]; selected: string; origin: string; in_kaohsiung: boolean }>(
       "/api/cast/devices",
       { signal }, 45000,
     ),

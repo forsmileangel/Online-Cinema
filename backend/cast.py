@@ -111,6 +111,8 @@ def selected_uuid() -> str:
 def select(uuid: str) -> None:
     with _lock:
         from . import cast_devices
+        if not cast_devices.available(uuid):
+            raise RuntimeError("請先勾選「我在高雄」再選擇高雄電視")
         if uuid not in _casts and not cast_devices.known(uuid):
             raise RuntimeError("找不到這台電視，請再掃描一次")
     db.set_setting("cast_uuid", uuid)
@@ -368,6 +370,22 @@ def status(uuid: str = "") -> dict:
     with _operation(deadline):
         uuid, cast = _cast(uuid, deadline)
         return _available_status(uuid, cast, deadline)
+
+
+def reconnect(uuid: str, content_id: str, session_id: str, title: str = "") -> dict:
+    marker = parse_qs(urlparse(content_id).query).get("cast_session", [""])[0]
+    if not session_id or not marker.startswith(session_id + "-"):
+        raise ValueError("無法確認原本的投放，請重新投放")
+    deadline = time.monotonic() + CONFIRM_TIMEOUT
+    with _operation(deadline):
+        uuid, device = _cast(uuid, deadline)
+        state = _available_status(uuid, device, deadline)
+        if state["idle"] or state["content_id"] != content_id or _active.get(uuid, content_id) != content_id:
+            raise RuntimeError("電視已停止或切換其他內容，請重新投放")
+        if isinstance(device, dlna.Renderer):
+            device.title = title
+        _active[uuid] = content_id
+        return {**state, "title": title}
 
 
 def session_content(uuid: str, session_id: str) -> str:

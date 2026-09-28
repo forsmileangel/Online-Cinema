@@ -166,6 +166,7 @@ class SettingsOut(BaseModel):
     source: str = "hongguo"
     theme: str = ""
     lan_tv: bool = False
+    in_kaohsiung: bool = False
     lan_ips: list[str] = []
     tv_code: str = ""
     tv_url: str = ""
@@ -176,3 +177,4 @@ class SettingsIn(BaseModel):
     source: str | None = None
     theme: str | None = None
     lan_tv: bool | None = None
+    in_kaohsiung: bool | None = None

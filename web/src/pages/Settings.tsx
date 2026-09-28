@@ -19,6 +19,7 @@ function hexOf(v: string) {
 export function SettingsPage() {
   const [s, setS] = useState<Settings | null>(null);
   const [msg, setMsg] = useState("");
+  const [savingLocation, setSavingLocation] = useState(false);
   const [theme, setTheme] = useState<SavedTheme>(() => loadSavedTheme());
 
   useEffect(() => {
@@ -91,7 +92,7 @@ export function SettingsPage() {
 
       <h2 className="h1" style={{ fontSize: 20, marginTop: 36 }}>投放到電視</h2>
       <p className="muted">
-        播放頁會有「投放這支影片」。支援 Chromecast／Google TV 與 LG／DLNA 電視，與電腦同一 Wi-Fi。變更後請重啟 Windows 工作排程器中的「Online Cinema Server」工作；使用手動啟動時再重開 start.bat，並在防火牆放行 6970。選片在電腦上點，電視播放選定內容；劇集可由伺服器接續播放，遙控器支援依電視而異。
+        播放頁會有「投放到電視」。支援 Chromecast／Google TV 與 Philips、LG 等 DLNA 電視，與電腦位於同一區網。變更區網允許設定後請重啟 Windows 工作排程器中的「Online Cinema Server」工作；使用手動啟動時再重開 start.bat，並在防火牆放行 6970。選片在電腦上點，電視播放選定內容；劇集可由伺服器接續播放，遙控器支援依電視而異。
       </p>
       <p>
         <label>
@@ -107,6 +108,20 @@ export function SettingsPage() {
           />{" "}
           允許投放（區網）
         </label>
+      </p>
+      <p>
+        <label>
+          <input type="checkbox" checked={!!s.in_kaohsiung} disabled={savingLocation} onChange={(e) => {
+            const enabled = e.target.checked;
+            setSavingLocation(true);
+            void api.saveSettings({ in_kaohsiung: enabled }).then((next) => {
+              setS(next);
+              setMsg(enabled ? "已顯示高雄 Philips 電視，無需重啟服務。" : "已隱藏高雄電視；既有投放不會中斷。");
+            }).catch((e: Error) => setMsg(e.message)).finally(() => setSavingLocation(false));
+          }} />{" "}
+          我在高雄
+        </label>
+        <span className="muted"> · 勾選後才顯示高雄 Philips 電視，其他電視照常顯示。</span>
       </p>
       {s.lan_tv ? (
         <div>

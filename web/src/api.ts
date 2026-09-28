@@ -10,6 +10,11 @@ export type CastStatus = {
   current_time: number;
   duration: number;
   warning?: string;
+  volume_level?: number | null;
+  volume_muted?: boolean | null;
+  volume_scope?: "device" | "stream";
+  can_set_volume?: boolean;
+  can_mute?: boolean;
 };
 
 export type CastDevice = { uuid: string; name: string; host: string; kind: string; online: boolean; mac: string; can_wake: boolean; model?: string; location?: string; manual_power_on?: boolean };
@@ -116,7 +121,7 @@ export const api = {
   castSession: (uuid = "", signal?: AbortSignal) => req<CastSession | null>(`/api/cast/session?uuid=${encodeURIComponent(uuid)}`, { signal }, 10000),
   castSessionPlay: (body: { url: string; title: string; position_sec: number; uuid: string; source: string; video_id: string; episode_id: string; autoplay_next: boolean; wake: boolean }, signal?: AbortSignal) =>
     req<CastSession>("/api/cast/play", { method: "POST", body: JSON.stringify({ ...body, managed: true }), signal }, 10000),
-  castSessionControl: (uuid: string, session_id: string, action: string, values: { position_sec?: number; episode_id?: string; autoplay_next?: boolean } = {}) =>
+  castSessionControl: (uuid: string, session_id: string, action: string, values: { position_sec?: number; episode_id?: string; autoplay_next?: boolean; volume_level?: number; muted?: boolean } = {}) =>
     req<CastSession>("/api/cast/session/control", { method: "POST", body: JSON.stringify({ uuid, session_id, action, ...values }) }, 10000),
   castDeviceMac: (uuid: string, mac: string) => req("/api/cast/device", { method: "PUT", body: JSON.stringify({ uuid, mac }) }, 10000),
   castControl: (action: string, uuid: string, content_id: string, position_sec?: number, signal?: AbortSignal) =>

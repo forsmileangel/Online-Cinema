@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import socket
 import threading
 import time
@@ -206,7 +207,7 @@ def check_media_origin(origin: str) -> None:
 
 def _status(uuid: str, cast, deadline: float | None = None) -> dict:
     if isinstance(cast, dlna.Renderer):
-        return cast.status(deadline=deadline)
+        return {**cast.status(deadline=deadline), "can_set_volume": False, "can_mute": False}
     st = cast.media_controller.status
     phase = st.player_state
     return {
@@ -215,7 +216,64 @@ def _status(uuid: str, cast, deadline: float | None = None) -> dict:
         "content_id": st.content_id or "", "idle_reason": st.idle_reason or "",
         "current_time": float(st.current_time or 0), "duration": float(st.duration or 0),
         "title": st.title or "",
+        **_volume_status(cast),
     }
+
+
+def _volume_status(cast) -> dict:
+    receiver = cast.status
+    device_volume = getattr(receiver, "volume_control_type", "") in {"master", "attenuation"}
+    source = receiver if device_volume else cast.media_controller.status
+    level = getattr(source, "volume_level", None)
+    muted = getattr(source, "volume_muted", None)
+    valid_level = type(level) in (int, float) and math.isfinite(level) and 0 <= level <= 1
+    return {
+        "volume_level": float(level) if valid_level else None,
+        "volume_muted": muted if isinstance(muted, bool) else None,
+        "can_set_volume": valid_level and (device_volume or getattr(source, "supports_stream_volume", False) is True),
+        "can_mute": isinstance(muted, bool) and (device_volume or getattr(source, "supports_stream_mute", False) is True),
+        "volume_scope": "device" if device_volume else "stream",
+    }
+
+
+def _set_volume(uuid, device, state, expected, deadline, *, level=None, muted=None) -> dict:
+    if state["idle"] or state["content_id"] != expected:
+        raise RuntimeError("影片已停止或切換，請重新確認投放")
+    if (level is not None and not state.get("can_set_volume")) or (muted is not None and not state.get("can_mute")):
+        raise ValueError("這台裝置目前不支援網頁音量控制，請使用遙控器")
+    # Moving the slider also unmutes, without changing the remembered level
+    # when the user only presses mute.
+    if level is not None and state.get("can_mute"):
+        muted = False
+    if state["volume_scope"] == "device":
+        if level is not None:
+            device.set_volume(level, timeout=_remaining(deadline, "調整音量", 5))
+        if muted is not None:
+            device.set_volume_muted(muted, timeout=_remaining(deadline, "切換靜音", 5))
+    else:
+        volume = {}
+        if level is not None:
+            volume["level"] = level
+        if muted is not None:
+            volume["muted"] = muted
+        received, result = threading.Event(), []
+        def acknowledged(ok, _data):
+            result.append(ok)
+            received.set()
+        device.media_controller.send_message({"type": "SET_VOLUME", "mediaSessionId": device.media_controller.status.media_session_id,
+                                              "volume": volume}, inc_session_id=True, callback_function=acknowledged)
+        if not received.wait(_remaining(deadline, "調整音量", 5)) or not result[0]:
+            raise ReceiverUnavailable("未收到投放音量調整回應")
+    while True:
+        # Read receiver and media volume back; an accepted command is not yet
+        # proof of the actual audible level, especially on fixed-volume TVs.
+        _, device = _cast(uuid, deadline)
+        current = _available_status(uuid, device, deadline)
+        if current["idle"] or current["content_id"] != expected:
+            raise RuntimeError("影片已停止或切換，請重新確認投放")
+        if (level is None or (current.get("volume_level") is not None and abs(current["volume_level"] - level) < .005)) and (muted is None or current.get("volume_muted") is muted):
+            return current
+        time.sleep(_remaining(deadline, "確認音量", .1))
 
 
 def _fresh_status(uuid: str, cast, deadline: float | None = None) -> dict:
@@ -343,9 +401,14 @@ def play(content_id: str, content_type: str, title: str, position: float = 0, uu
         return state
 
 
-def control(action: str, position: float | None = None, uuid: str = "", content_id: str = "", *, guard=None) -> dict:
-    if action not in {"pause", "resume", "play", "seek", "stop"}:
+def control(action: str, position: float | None = None, uuid: str = "", content_id: str = "", *, guard=None,
+            volume_level: float | None = None, muted: bool | None = None) -> dict:
+    if action not in {"pause", "resume", "play", "seek", "stop", "volume", "mute"}:
         raise ValueError("不支援的電視指令")
+    if action == "volume" and (type(volume_level) not in (int, float) or not math.isfinite(volume_level) or not 0 <= volume_level <= 1):
+        raise ValueError("音量必須介於 0 與 1")
+    if action == "mute" and not isinstance(muted, bool):
+        raise ValueError("請指定是否靜音")
     deadline = time.monotonic() + CONFIRM_TIMEOUT
     with _operation(deadline):
         uuid, cast = _cast(uuid, deadline)
@@ -360,6 +423,10 @@ def control(action: str, position: float | None = None, uuid: str = "", content_
             raise ValueError("跳轉位置超出影片範圍")
         if guard and not guard():
             raise RuntimeError("投放已取消")
+        if action in {"volume", "mute"}:
+            return _set_volume(uuid, cast, state, expected, deadline,
+                               level=volume_level if action == "volume" else None,
+                               muted=muted if action == "mute" else None)
         was_paused = state["paused"]
         # Leave time to restore pause even if the seek itself times out.
         command_deadline = deadline - min(5, _remaining(deadline, "跳轉進度") / 2) if action == "seek" and was_paused else deadline

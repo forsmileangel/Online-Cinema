@@ -77,12 +77,48 @@ export function Player({
   const [show, setShow] = useState(true);
   const [vol, setVol] = useState(() => loadVol());
   const [muted, setMuted] = useState(() => loadVol() === 0);
+  const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
+  const volumeDraftRef = useRef<number | null>(null);
+  const lastRemoteVol = useRef(0.2);
   const [scrub, setScrub] = useState<number | null>(null);
   const hideTimer = useRef<number | null>(null);
   const duration = casting ? remote?.status?.duration || 0 : d;
   const currentTime = casting ? remote?.status?.current_time || 0 : t;
   const isPaused = casting ? !!remote?.status?.paused : paused;
   const canSeek = casting ? !!remote?.canSeek : Number.isFinite(duration) && duration > 0;
+  const remoteLevel = remote?.status?.volume_level;
+  const remoteMuted = !!remote?.status?.volume_muted;
+  const hasRemoteVolume = !!remote?.status?.can_set_volume || !!remote?.status?.can_mute;
+
+  useEffect(() => {
+    if (remoteLevel != null && remoteLevel > 0) lastRemoteVol.current = remoteLevel;
+  }, [remoteLevel]);
+
+  useEffect(() => {
+    volumeDraftRef.current = null;
+    setVolumeDraft(null);
+    lastRemoteVol.current = remoteLevel != null && remoteLevel > 0 ? remoteLevel : 0.2;
+  }, [remote?.active?.uuid, remote?.active?.session_id]);
+
+  useEffect(() => {
+    if (!remote?.busy && volumeDraftRef.current == null) setVolumeDraft(null);
+  }, [remote?.busy, remoteLevel]);
+
+  function changeVolume(next: number) {
+    if (!casting) { applyVol(next); return; }
+    if (!remote?.canSetVolume) return;
+    volumeDraftRef.current = next;
+    setVolumeDraft(next);
+  }
+
+  function commitVolume() {
+    const next = volumeDraftRef.current;
+    volumeDraftRef.current = null;
+    if (next == null) return;
+    if (!remote?.canSetVolume) { setVolumeDraft(null); return; }
+    // Commit once on release, rather than queueing a request per slider pixel.
+    void remote.setVolume(next);
+  }
 
   useEffect(() => {
     dragging.current = false;
@@ -108,6 +144,8 @@ export function Player({
     if (!video || !src.startsWith("/api/hls")) return;
     setPlayError("");
     setLoading(true);
+    setLevels([]);
+    setLevel(-1);
     let hls: Hls | null = null;
     let nativeMetadata: (() => void) | undefined;
     const start = startAt > 5 ? startAt : 0;
@@ -239,6 +277,9 @@ export function Player({
         } else if (e.key === " " || e.code === "Space" || e.key === "MediaPlayPause" || e.key === "Enter") {
           e.preventDefault();
           togglePlay();
+        } else if (e.key === "m" || e.key === "M") {
+          e.preventDefault();
+          toggleMute();
         }
         return;
       }
@@ -338,6 +379,12 @@ export function Player({
   }
 
   function toggleMute() {
+    if (casting) {
+      if (!remote?.canMute) return;
+      if (remoteLevel === 0 && remote.canSetVolume) void remote.setVolume(lastRemoteVol.current);
+      else void remote.setMuted(!remoteMuted);
+      return;
+    }
     const v = videoRef.current;
     if (!v) return;
     if (!v.muted && v.volume > 0) {
@@ -420,7 +467,10 @@ export function Player({
   const shownT = scrub != null && duration ? scrub * duration : currentTime;
   const playPct = duration ? Math.min(100, Math.max(0, shownT / duration * 100)) : 0;
   const bufPct = !casting && duration ? (buf / duration) * 100 : 0;
-  const shownVol = muted ? 0 : vol;
+  const shownVol = casting ? volumeDraft ?? (remoteMuted ? 0 : remoteLevel ?? 0) : muted ? 0 : vol;
+  const shownMuted = casting ? remoteMuted : muted;
+  const castQuality = new URLSearchParams(remote?.status?.content_id.split("?")[1] || "").get("nesthub") === "1"
+    ? "最高 720p" : levels.length === 1 ? `${levels[0].h}p` : "投放自動";
 
   return (
     <div
@@ -484,9 +534,11 @@ export function Player({
             <span className="times">
               {casting ? "電視 " : ""}{fmt(shownT)} / {fmt(duration)}
             </span>
-            <div className="vol" onClick={(e) => e.stopPropagation()}>
-              <button type="button" disabled={casting} onClick={toggleMute} title={casting ? "請使用電視調整音量" : "靜音 (M)"}>
-                {muted || shownVol === 0 ? "靜音" : "聲音"}
+            {!casting || hasRemoteVolume ? <div className="vol" onClick={(e) => e.stopPropagation()}
+              title={casting ? remote?.status?.volume_scope === "stream" ? "影片音量；電視本身音量仍由遙控器調整" : "投放裝置音量" : "本機音量"}>
+              <button type="button" disabled={casting && !remote?.canMute} onClick={toggleMute}
+                aria-label={casting ? shownMuted || shownVol === 0 ? "取消投放靜音" : "投放靜音" : muted ? "取消靜音" : "靜音"} title="靜音 (M)">
+                {shownMuted || shownVol === 0 ? "靜音" : "聲音"}
               </button>
               <input
                 type="range"
@@ -494,27 +546,31 @@ export function Player({
                 max={1}
                 step={0.01}
                 value={shownVol}
-                aria-label="音量"
-                disabled={casting}
-                onChange={(e) => applyVol(Number(e.target.value))}
+                aria-label={casting ? "投放音量" : "音量"}
+                disabled={casting && !remote?.canSetVolume}
+                onChange={(e) => changeVolume(Number(e.target.value))}
+                onPointerUp={commitVolume}
+                onKeyUp={commitVolume}
+                onBlur={commitVolume}
+                onPointerCancel={() => { volumeDraftRef.current = null; setVolumeDraft(null); }}
               />
               <span className="times">{Math.round(shownVol * 100)}</span>
-            </div>
+            </div> : <span className="times">{remote?.uncertain ? "音量暫不可用" : remote?.status?.can_set_volume === false ? "音量請用遙控器" : "讀取投放音量…"}</span>}
             <span className="spacer" />
-            <select
+            {casting ? <span className="quality-status" aria-label="投放畫質" title="投放端處理畫質；本機畫質選單只適用於本機播放">{castQuality}</span> : levels.length > 1 ? <select
               className="field"
-              disabled={casting}
+              aria-label="播放畫質"
               value={level}
               onChange={(e) => changeLevel(Number(e.target.value))}
               onClick={(e) => e.stopPropagation()}
             >
-              <option value={-1}>Auto</option>
+              <option value={-1}>自動</option>
               {levels.map((l) => (
                 <option key={l.i} value={l.i}>
                   {l.h}p
                 </option>
               ))}
-            </select>
+            </select> : <span className="quality-status" aria-label="播放畫質">{levels.length === 1 ? `${levels[0].h}p` : "來源畫質"}</span>}
             <div className="fs-col" onClick={(e) => e.stopPropagation()}>
               <button type="button" onClick={(e) => { e.stopPropagation(); toggleFs(); }}>
                 全螢幕

@@ -95,6 +95,8 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
   const busy = requesting || !!status?.pending_action || status?.phase === "waking" || status?.phase === "loading" || status?.phase === "reconnecting";
   const canControl = !!active && !!status && (status.playing || status.paused) && !busy && !uncertain;
   const canSeek = canControl && status!.duration > 0;
+  const canSetVolume = canControl && !!status?.can_set_volume;
+  const canMute = canControl && !!status?.can_mute;
 
   async function play(wake = false) {
     if (!selected || !playlist || pending.current) return;
@@ -112,7 +114,7 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
     finally { if (version === generation.current) { pending.current = false; setRequesting(false); } }
   }
 
-  async function command(action: string, values: { position_sec?: number; episode_id?: string; autoplay_next?: boolean } = {}) {
+  async function command(action: string, values: { position_sec?: number; episode_id?: string; autoplay_next?: boolean; volume_level?: number; muted?: boolean } = {}) {
     if (!active?.session_id || pending.current) return;
     const version = generation.current;
     pending.current = true; setRequesting(true);
@@ -126,6 +128,14 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
   async function control(action: "pause" | "resume" | "seek" | "stop", position?: number) {
     if (action !== "stop" && !(action === "seek" ? canSeek : canControl)) return;
     await command(action, { position_sec: position });
+  }
+
+  async function setVolume(volume_level: number) {
+    if (canSetVolume) await command("volume", { volume_level });
+  }
+
+  async function setMuted(muted: boolean) {
+    if (canMute) await command("mute", { muted });
   }
 
   async function returnToLocal() {
@@ -142,7 +152,7 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
     catch (e) { setMsg(e instanceof Error ? e.message : "儲存失敗"); }
   }
 
-  return { canPlay: !!playlist, devices, selected, setSelected, inKaohsiung, setInKaohsiung: (enabled: boolean) => scan(enabled), busy, restoring, active, status, msg, uncertain, canControl, canSeek, scan, play, control, returnToLocal,
+  return { canPlay: !!playlist, devices, selected, setSelected, inKaohsiung, setInKaohsiung: (enabled: boolean) => scan(enabled), busy, restoring, active, status, msg, uncertain, canControl, canSeek, canSetVolume, canMute, setVolume, setMuted, scan, play, control, returnToLocal,
     episode: (episode_id: string) => command("episode", { episode_id }),
     autoplay: (autoplay_next: boolean) => command("autoplay", { autoplay_next }), retry: () => command("retry"), saveMac };
 }

@@ -125,6 +125,8 @@ class CastControlIn(BaseModel):
     position_sec: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     uuid: str = ""
     content_id: str = ""
+    volume_level: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False, strict=True)
+    muted: bool | None = Field(default=None, strict=True)
 
 
 class CastSessionControlIn(BaseModel):
@@ -134,6 +136,8 @@ class CastSessionControlIn(BaseModel):
     position_sec: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     episode_id: str = Field(default="", max_length=16)
     autoplay_next: bool = False
+    volume_level: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False, strict=True)
+    muted: bool | None = Field(default=None, strict=True)
 
 
 class CastDeviceConfigIn(BaseModel):

@@ -410,7 +410,8 @@ def cast_play(body: CastPlayIn):
 @app.post("/api/cast/control")
 def cast_control(body: CastControlIn):
     try:
-        return chromecast.control(body.action, body.position_sec, body.uuid, body.content_id)
+        return chromecast.control(body.action, body.position_sec, body.uuid, body.content_id,
+                                  volume_level=body.volume_level, muted=body.muted)
     except Exception as e:
         raise HTTPException(502, str(e) or "控制失敗") from e
 

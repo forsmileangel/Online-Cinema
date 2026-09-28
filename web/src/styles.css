@@ -312,7 +312,7 @@ button.chip { font: inherit; }
 .player.show .overlay, .player:hover .overlay { opacity: 1; }
 .controls { padding: 10px 16px 14px; pointer-events: auto; }
 .vol {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0;
 }
 .vol input[type="range"] {
   width: 92px; accent-color: var(--accent); cursor: pointer;
@@ -340,12 +340,13 @@ button.chip { font: inherit; }
   background: #111; padding: 3px 7px; border-radius: 6px; font-size: 12px;
 }
 .ctrl-row {
-  display: flex; align-items: flex-end; gap: 10px; margin-top: 8px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 8px;
 }
 .ctrl-row button {
   background: transparent; border: 0; color: #fff; padding: 6px;
-  min-width: 36px;
+  min-width: 36px; white-space: nowrap;
 }
+.quality-status { color: #ccc; font-size: 13px; white-space: nowrap; }
 .times { font-variant-numeric: tabular-nums; font-size: 13px; color: #ddd; }
 .ctrl-row .spacer { flex: 1; }
 .fs-col {

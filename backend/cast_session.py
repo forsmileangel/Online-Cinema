@@ -201,7 +201,7 @@ class PlaybackSession:
         self.save(state)
 
     def command(self, action: str, **values):
-        if action not in {"pause", "resume", "seek", "stop", "episode", "autoplay", "retry", "detach"}:
+        if action not in {"pause", "resume", "seek", "stop", "episode", "autoplay", "retry", "detach", "volume", "mute"}:
             raise ValueError("不支援的投放操作")
         if self.snapshot["phase"] == "replaced" and action not in {"detach", "stop"}:
             raise ValueError("電視已切換其他內容，請重新投放")
@@ -234,8 +234,9 @@ class PlaybackSession:
         if action == "stop" and not expected:
             self.publish(phase="stopped", playing=False, paused=False)
             return
+        audio = {key: values[key] for key in ("volume_level", "muted") if key in values} if action in {"volume", "mute"} else {}
         state = cast.control(action, values.get("position_sec"), self.uuid, expected,
-                             guard=lambda: not self.cancelled.is_set())
+                             guard=lambda: not self.cancelled.is_set(), **audio)
         self.save(self.previous if action == "stop" and self.previous else state, True)
         self.previous = state
         self.publish(**state, phase="stopped" if action == "stop" else "paused" if state.get("paused") else "playing", error="")
@@ -273,7 +274,10 @@ class PlaybackSession:
             try:
                 self.handle(action, values)
             except Exception as e:
-                self.publish(error=str(e), phase="error", playing=False, paused=False)
+                if action in {"volume", "mute"}:
+                    self.publish(error=str(e))
+                else:
+                    self.publish(error=str(e), phase="error", playing=False, paused=False)
             finally:
                 self.publish(pending_action="")
 

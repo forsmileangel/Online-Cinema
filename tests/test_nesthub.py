@@ -78,7 +78,7 @@ class NestHubTests(unittest.TestCase):
 
     def test_converted_ranges_and_head_describe_converted_bytes(self):
         for method in ('GET', 'HEAD'):
-            req = Request({'type': 'http', 'method': method, 'path': '/api/hls', 'headers': [(b'range', b'bytes=2-5')]})
+            req = Request({'type': 'http', 'method': method, 'path': '/api/hls', 'query_string': b'', 'headers': [(b'range', b'bytes=2-5')]})
             with patch.object(nesthub, 'transcode', return_value=b'0123456789'):
                 response = hls_proxy._nesthub_segment(req, 'url', b'original')
             self.assertEqual(response.status_code, 206)

@@ -87,6 +87,7 @@ export function Watch() {
   const [resumeEp, setResumeEp] = useState("");
   const [episodeError, setEpisodeError] = useState("");
   const [resolveAttempt, setResolveAttempt] = useState(0);
+  const [retryResume, setRetryResume] = useState<{ episode: string; position: number } | null>(null);
   const failedRefresh = useRef("");
   const [autoplay, setAutoplay] = useState(loadAutoplay);
   const posRef = useRef(0);
@@ -100,6 +101,7 @@ export function Watch() {
     setData(null);
     setErr("");
     setEpisodeError("");
+    setRetryResume(null);
     failedRefresh.current = "";
     setZhTitle("");
     setZhDesc("");
@@ -234,7 +236,7 @@ export function Watch() {
   const currentEp = episodes.find((e) => e.id === activeEp);
   const playlist = currentEp?.playlist || (!episodes.length ? data?.playlist || "" : "");
   const resume = data?.episode_id || resumeEp;
-  const startAt = episodes.length
+  const startAt = retryResume?.episode === activeEp ? retryResume.position : episodes.length
     ? (!epTouched && data?.episode_id && activeEp === resume ? data?.position_sec || 0 : 0)
     : data?.position_sec || 0;
   const castTitle = activeEp && episodes.length > 1 ? `${title} ${currentEp?.title || activeEp}` : title;
@@ -259,16 +261,22 @@ export function Watch() {
     const root = epRailRef.current;
     const on = root?.querySelector<HTMLElement>(".chip.on");
     if (!root || !on) return;
-    const r = on.getBoundingClientRect();
-    const b = root.getBoundingClientRect();
-    if (r.top < b.top) root.scrollTop -= b.top - r.top;
-    else if (r.bottom > b.bottom) root.scrollTop += r.bottom - b.bottom;
-  }, [activeEp]);
+    const reveal = () => {
+      const r = on.getBoundingClientRect();
+      const b = root.getBoundingClientRect();
+      root.scrollTop += r.top + r.height / 2 - b.top - b.height / 2;
+    };
+    reveal();
+    const observer = new ResizeObserver(reveal);
+    observer.observe(root);
+    return () => observer.disconnect();
+  }, [activeEp, episodes.length]);
 
   function pickEpisode(nextId: string) {
     if (nextId === epId) return;
     if (cast.active) { void cast.episode(nextId); return; }
     setEpisodeError("");
+    setRetryResume(null);
     endLock.current = "";
     failedRefresh.current = "";
     setEpId(nextId);
@@ -295,7 +303,8 @@ export function Watch() {
     pickEpisode(ids[i + 1]);
   }, [cast.active, data, epId, id]);
 
-  function retryEpisode() {
+  function retryEpisode(position = posRef.current) {
+    setRetryResume({ episode: activeEp, position: Number.isFinite(position) ? Math.max(0, position) : 0 });
     setEpisodeError("");
     setData((prev) => prev ? { ...prev, episodes: prev.episodes?.map((e) => e.id === activeEp ? { ...e, playlist: "" } : e) } : prev);
     setResolveAttempt((n) => n + 1);
@@ -305,9 +314,10 @@ export function Watch() {
     }
   }
 
-  function playbackError() {
+  function playbackError(position: number) {
     const token = `${source}:${id}:${activeEp}`;
-    if (failedRefresh.current !== token) { failedRefresh.current = token; retryEpisode(); }
+    posRef.current = position;
+    if (failedRefresh.current !== token) { failedRefresh.current = token; retryEpisode(position); }
     else setEpisodeError("播放來源無法載入，請重試或選擇其他集數。");
   }
 
@@ -337,7 +347,7 @@ export function Watch() {
                 <FavUnderFs on={!!data.favorited} onClick={() => void toggleFav()} />
               </div>
             )}
-            {episodeError ? <p className="banner err" role="alert">{episodeError} <button className="btn" onClick={retryEpisode}>重試這一集</button></p> : null}
+            {episodeError ? <p className="banner err" role="alert">{episodeError} <button className="btn" onClick={() => retryEpisode()}>重試這一集</button></p> : null}
           </div>
           <CastBar controller={cast} currentEpisode={currentEp?.title} currentTitle={title} />
         </div>
@@ -365,6 +375,7 @@ export function Watch() {
                   key={e.id}
                   type="button"
                   className={`chip${e.id === activeEp ? " on" : ""}`}
+                  aria-current={e.id === activeEp ? "step" : undefined}
                   data-tv="1"
                   disabled={cast.busy}
                   onClick={() => pickEpisode(e.id)}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+import logging
 from urllib.parse import parse_qs, quote, urljoin
 
 from fastapi.responses import Response, StreamingResponse
@@ -9,7 +10,7 @@ from starlette.background import BackgroundTask
 from starlette.requests import Request
 from urllib.parse import urlparse
 
-from . import http_client, seg_cache
+from . import http_client, seg_cache, lan
 from .security import (
     UnsafeURL,
     SiteBusy,
@@ -265,21 +266,36 @@ def serve_media(request: Request, raw_url: str) -> Response:
                 return _nesthub_segment(request, url, cached)
             return Response(cached, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
 
-    candidates = [url]
+    # Finish segment retries before the browser starts another copy of the same
+    # request. Never splice partial bytes from different connections.
+    deadline = time.monotonic() + (18 if cacheable else 30)
+    interfaces: list[str | None] = [None]
     for attempt in range(3):
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("影片分段下載逾時，請重試")
+        interface = interfaces[min(attempt, len(interfaces) - 1)]
         try:
-            candidate = assert_hls_url(candidates[min(attempt, len(candidates) - 1)])
-            response = http_client.fetch_bytes(candidate, referer=referer, allowed_hosts=hls_allowed_hosts(candidate), timeout=6 if len(candidates) > 1 else 30,
+            response = http_client.fetch_bytes(url, referer=referer, allowed_hosts=hls_allowed_hosts(url), timeout=min(left, 6) if cacheable else left,
                                                stream=not playlist and not cacheable, impersonate=imp,
                                                method="GET" if playlist or convert_segment else request.method, range_header=None if playlist else range_header,
-                                               redirect_validator=_playlist_media_url)
+                                               redirect_validator=_playlist_media_url, interface=interface)
             break
         except SiteBusy:
             raise
         except UnsafeURL:
             raise
-        except Exception:
+        except Exception as error:
             if attempt == 2:
+                raise
+            if cacheable and http_client.is_network_failure(error):
+                if attempt == 0:
+                    ips = lan.download_interfaces()
+                    if len(ips) > 1:
+                        interfaces = [None, ips[1], ips[0]]
+                logging.getLogger(__name__).warning("Segment download retry host=%s attempt=%s interface=%s cause=%s",
+                    parsed.hostname, attempt + 2, interfaces[min(attempt + 1, len(interfaces) - 1)] or "default", type(error).__name__)
+            elif cacheable:
                 raise
     upstream = {k.lower(): v for k, v in response.headers.items()}
     headers = {k: upstream[k] for k in ("content-length", "content-range", "accept-ranges") if k in upstream}

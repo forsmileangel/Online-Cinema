@@ -6,7 +6,7 @@ import logging
 from typing import Any, Callable
 from urllib.parse import urljoin, urlparse
 
-from curl_cffi import requests
+from curl_cffi import requests, CurlECode
 
 from . import settings as S
 from .security import UnsafeURL, SiteBusy, final_url_still_allowed, touch_media_host
@@ -26,17 +26,28 @@ def session() -> requests.Session:
         return _session
 
 
-def media_session(impersonate: str | None = None) -> requests.Session:
-    key = impersonate or _impersonate
+def media_session(impersonate: str | None = None, interface: str | None = None) -> requests.Session:
+    key = (impersonate or _impersonate, interface)
     store = getattr(_tls, "by_imp", None)
     if store is None:
         store = {}
         _tls.by_imp = store
     sess = store.get(key)
     if sess is None:
-        sess = requests.Session(impersonate=key)
+        if len(store) >= 8:
+            store.pop(next(iter(store))).close()
+        sess = requests.Session(impersonate=key[0], interface=interface)
         store[key] = sess
     return sess
+
+
+def is_network_failure(error: Exception) -> bool:
+    return isinstance(error, (TimeoutError, ConnectionError)) or (
+        isinstance(error, requests.RequestsError) and error.code in {
+            CurlECode.COULDNT_CONNECT, CurlECode.COULDNT_RESOLVE_HOST, CurlECode.PARTIAL_FILE,
+            CurlECode.OPERATION_TIMEDOUT, CurlECode.RECV_ERROR, CurlECode.SEND_ERROR,
+            CurlECode.GOT_NOTHING, CurlECode.INTERFACE_FAILED, CurlECode.HTTP2_STREAM,
+        })
 
 
 def reset_session(impersonate: str | None = None) -> None:
@@ -103,13 +114,14 @@ def fetch_bytes(
     method: str = "GET",
     range_header: str | None = None,
     redirect_validator: Callable[[str, str], str] | None = None,
+    interface: str | None = None,
 ) -> Any:
     headers = {
         "Accept": "*/*",
         "Referer": referer,
         "Origin": referer.split("/", 3)[0] + "//" + referer.split("/", 3)[2] if referer.count("/") >= 2 else referer,
     }
-    sess = media_session(impersonate)
+    sess = media_session(impersonate, interface)
     if range_header:
         headers["Range"] = range_header
     deadline = time.monotonic() + timeout

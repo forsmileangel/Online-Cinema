@@ -61,7 +61,7 @@ export function Player({
   startAt?: number;
   onProgress?: (pos: number, dur: number) => void;
   onEnded?: () => void;
-  onError?: () => void;
+  onError?: (position: number) => void;
   remote?: CastingController;
   returnPosition?: number;
   favorited?: boolean;
@@ -120,6 +120,8 @@ export function Player({
   const [playError, setPlayError] = useState("");
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
+  const playbackPosition = useRef(startAt);
+  const failureReported = useRef(false);
   const [loading, setLoading] = useState(true);
   const [show, setShow] = useState(true);
   const [vol, setVol] = useState(() => loadVol());
@@ -136,6 +138,14 @@ export function Player({
   const remoteLevel = remote?.status?.volume_level;
   const remoteMuted = !!remote?.status?.volume_muted;
   const hasRemoteVolume = !!remote?.status?.can_set_volume || !!remote?.status?.can_mute;
+
+  function playbackFailed() {
+    if (castingRef.current || failureReported.current) return;
+    failureReported.current = true;
+    setLoading(false);
+    setPlayError("播放來源無法載入");
+    onErrorRef.current?.(playbackPosition.current);
+  }
 
   useEffect(() => {
     if (remoteLevel != null && remoteLevel > 0) lastRemoteVol.current = remoteLevel;
@@ -190,6 +200,7 @@ export function Player({
     const video = videoRef.current;
     if (!video || !src.startsWith("/api/hls")) return;
     setPlayError("");
+    failureReported.current = false;
     setQualityError("");
     setLoading(true);
     setVideoHeight(0);
@@ -199,7 +210,8 @@ export function Player({
     let nativeMetadata: (() => void) | undefined;
     const resume = qualityResume.current;
     qualityResume.current = null;
-    const start = resume?.position ?? (startAt > 5 ? startAt : 0);
+    const start = resume?.position ?? Math.max(0, startAt);
+    playbackPosition.current = start;
     const beginPlayback = () => {
       if (resume?.paused) { setLoading(false); return; }
       if (!castingRef.current) void video.play().catch(() => { setLoading(false); setPlayError("瀏覽器暫停了自動播放，請按播放繼續。"); });
@@ -230,6 +242,13 @@ export function Player({
         maxBufferSize: 80 * 1000 * 1000,
         backBufferLength: 45,
         abrEwmaDefaultEstimate: 8_000_000,
+        fragLoadPolicy: { default: {
+          ...Hls.DefaultConfig.fragLoadPolicy.default,
+          // The proxy may retry over another adapter before sending a segment.
+          maxTimeToFirstByteMs: usingWeb720 ? 50000 : 22000,
+          timeoutRetry: { ...Hls.DefaultConfig.fragLoadPolicy.default.timeoutRetry!, maxNumRetry: 2 },
+          errorRetry: { ...Hls.DefaultConfig.fragLoadPolicy.default.errorRetry!, maxNumRetry: 2 },
+        } },
         xhrSetup(xhr) {
           xhr.withCredentials = false;
         },
@@ -254,7 +273,7 @@ export function Player({
         }
       });
       hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (data.fatal && !castingRef.current) { setLoading(false); setPlayError("播放來源無法載入"); onErrorRef.current?.(); }
+        if (data.fatal) playbackFailed();
       });
       hlsRef.current = hls;
       hls.loadSource(playbackSrc);
@@ -303,6 +322,7 @@ export function Player({
       setPaused(video.paused);
       setLoading(video.readyState < 3 && !video.paused);
       if (!castingRef.current) {
+        if (Number.isFinite(video.duration) && video.duration > 0) playbackPosition.current = video.currentTime;
         onProgress?.(video.currentTime, video.duration || 0);
         if (!video.paused && video.duration > 1 && video.currentTime >= video.duration - 0.2) onEnded?.();
       }
@@ -550,7 +570,7 @@ export function Player({
       onDoubleClick={onSurfaceDblClick}
       onWheel={onWheel}
     >
-      <video ref={videoRef} playsInline onResize={(e) => setVideoHeight(e.currentTarget.videoHeight)} onLoadedMetadata={(e) => setVideoHeight(e.currentTarget.videoHeight)} onPlay={() => setPlayError("")} onError={() => { if (!castingRef.current) { setLoading(false); setPlayError("播放來源無法載入"); onErrorRef.current?.(); } }} />
+      <video ref={videoRef} playsInline onResize={(e) => setVideoHeight(e.currentTarget.videoHeight)} onLoadedMetadata={(e) => setVideoHeight(e.currentTarget.videoHeight)} onPlay={() => setPlayError("")} onError={playbackFailed} />
       {!casting && (qualityBusy || qualityError) ? <div className="loading-pill" role="status">{qualityBusy ? "正在準備 720p…" : qualityError}</div> : null}
       {playError && !casting && !qualityBusy && !qualityError ? <div className="loading-pill" role="status">{playError}</div> : null}
       {isPaused ? (

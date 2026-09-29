@@ -362,6 +362,18 @@ button.chip { font: inherit; }
 .quality-status { color: #ccc; font-size: 13px; white-space: nowrap; }
 .times { font-variant-numeric: tabular-nums; font-size: 13px; color: #ddd; }
 .ctrl-row .spacer { flex: 1; }
+.episode-controls {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  margin-top: 8px; font-size: 13px;
+}
+.episode-controls button {
+  background: rgba(30,30,30,.85); border: 1px solid #555; border-radius: 8px;
+  color: #fff; padding: 8px 12px; white-space: nowrap;
+}
+.episode-controls button:disabled { opacity: .4; cursor: default; }
+.episode-controls span {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #ddd;
+}
 .fs-col {
   display: flex;
   flex-direction: column;

@@ -333,6 +333,20 @@ export function Watch() {
   if (!data) return <div className="empty">解析片源中…</div>;
 
   const manyEps = episodes.length > 1;
+  const episodeIndex = episodes.findIndex((e) => e.id === activeEp);
+  const previousEpisode = episodes[episodeIndex - 1];
+  const nextEpisode = episodeIndex >= 0 ? episodes[episodeIndex + 1] : undefined;
+  const episodeControls = manyEps ? (
+    <div className="episode-controls" role="group" aria-label="切換集數" onClick={(e) => e.stopPropagation()}>
+      <button type="button" aria-label="上一集" disabled={!previousEpisode || cast.busy || cast.restoring}
+        title={previousEpisode ? `上一集：${previousEpisode.title}` : "已是第一集"}
+        onClick={() => { if (previousEpisode) pickEpisode(previousEpisode.id); }}>◀ 上一集</button>
+      <span>{currentEp?.title}</span>
+      <button type="button" aria-label="下一集" disabled={!nextEpisode || cast.busy || cast.restoring}
+        title={nextEpisode ? `下一集：${nextEpisode.title}` : "已是最後一集"}
+        onClick={() => { if (nextEpisode) pickEpisode(nextEpisode.id); }}>下一集 ▶</button>
+    </div>
+  ) : null;
 
   return (
     <div className="watch">
@@ -340,7 +354,7 @@ export function Watch() {
         <div className="player-wrap">
           <div className="player-screen">
             {!cast.restoring && playlist && !episodeError ? (
-              <Player key={`${activeEp}:${resolveAttempt}`} onError={playbackError} src={playlist} startAt={startAt} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} />
+              <Player key={`${activeEp}:${resolveAttempt}`} onError={playbackError} src={playlist} startAt={startAt} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} episodeControls={episodeControls} />
             ) : (
               <div className="player">
                 <div className="empty">{episodeError ? "這一集無法播放" : `載入第${activeEp || ""}集…`}</div>

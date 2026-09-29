@@ -1,6 +1,6 @@
 import Hls from "hls.js";
 import { api } from "../api";
-import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
 import type { CastingController } from "../hooks/useCasting";
 
 const VOL_KEY = "cinema.volume";
@@ -56,6 +56,7 @@ export function Player({
   returnPosition,
   favorited,
   onToggleFav,
+  episodeControls,
 }: {
   src: string;
   startAt?: number;
@@ -66,6 +67,7 @@ export function Player({
   returnPosition?: number;
   favorited?: boolean;
   onToggleFav?: () => void;
+  episodeControls?: ReactNode;
 }) {
   const casting = !!remote?.active || !!remote?.restoring;
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -682,6 +684,7 @@ export function Player({
               ) : null}
             </div>
           </div>
+          {episodeControls}
         </div>
       </div>
     </div>

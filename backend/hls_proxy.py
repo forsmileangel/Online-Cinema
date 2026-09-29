@@ -27,11 +27,13 @@ _URI_ATTR = re.compile(r'URI="([^"]+)"')
 _ATTR = re.compile(r'([A-Z0-9-]+)=("[^"]*"|[^,]*)')
 
 
-def proxied_media(url: str, origin: str = "", *, nesthub: bool = False) -> str:
+def proxied_media(url: str, origin: str = "", *, nesthub: bool = False, web: bool = False) -> str:
     assert_hls_url(url)
     path = "/api/hls?u=" + quote(url, safe="")
     if nesthub:
         path += "&nesthub=1"
+        if web:
+            path += "&web=1"
     if origin:
         return origin.rstrip("/") + path
     return path
@@ -53,7 +55,7 @@ def _playlist_media_url(url: str, parent_host: str) -> str:
         return assert_hls_url(url)
 
 
-def rewrite_playlist(text: str, base_url: str, origin: str = "", *, nesthub: bool = False) -> str:
+def rewrite_playlist(text: str, base_url: str, origin: str = "", *, nesthub: bool = False, web: bool = False) -> str:
     if len(text) > 2_000_000:
         raise UnsafeURL("playlist too large")
     if nesthub:
@@ -65,14 +67,14 @@ def rewrite_playlist(text: str, base_url: str, origin: str = "", *, nesthub: boo
         if stripped and not stripped.startswith("#"):
             abs_url = urljoin(base_url, stripped)
             _playlist_media_url(abs_url, parent_host)
-            out.append(proxied_media(abs_url, origin, nesthub=nesthub))
+            out.append(proxied_media(abs_url, origin, nesthub=nesthub, web=web))
             continue
         if "URI=" in line:
 
             def _repl(match: re.Match[str]) -> str:
                 abs_url = urljoin(base_url, match.group(1))
                 _playlist_media_url(abs_url, parent_host)
-                return f'URI="{proxied_media(abs_url, origin, nesthub=nesthub)}"'
+                return f'URI="{proxied_media(abs_url, origin, nesthub=nesthub, web=web)}"'
 
             out.append(_URI_ATTR.sub(_repl, line))
             continue
@@ -169,12 +171,14 @@ def _validate_nesthub_playlist(text: str) -> None:
             raise ValueError("此來源的分段格式尚不支援 Nest Hub 720p 相容模式，請改選其他來源")
 
 
-def nesthub_media_url(proxy_url: str, deadline: float) -> str:
+def nesthub_media_url(proxy_url: str, deadline: float, *, strict: bool = False) -> str:
     parsed = urlparse(proxy_url)
     urls = parse_qs(parsed.query).get("u", [])
     if parsed.path != "/api/hls" or len(urls) != 1:
         return proxy_url
     upstream = assert_hls_url(urls[0])
+    if strict and not urlparse(upstream).path.lower().endswith(".m3u8"):
+        raise ValueError("此來源暫不支援 720p 轉換，請使用來源畫質")
     text, base = _read_playlist(upstream, deadline)
     variants, pending = [], None
     for line in text.splitlines():
@@ -193,6 +197,8 @@ def nesthub_media_url(proxy_url: str, deadline: float) -> str:
     elif variants:
         upstream = min(variants, key=lambda v: v[0] * v[1])[2]
     elif "#EXT-X-STREAM-INF:" in text:
+        if strict:
+            raise ValueError("此來源的影音格式暫不支援 720p 轉換，請使用來源畫質")
         return proxy_url  # Keep separate audio and unsupported codecs intact.
     if variants:
         _playlist_media_url(upstream, (urlparse(base).hostname or "").lower())
@@ -201,7 +207,11 @@ def nesthub_media_url(proxy_url: str, deadline: float) -> str:
         try:
             _validate_nesthub_playlist(text)
         except ValueError:
+            if strict:
+                raise ValueError("此來源的分段格式暫不支援 720p 轉換，請使用來源畫質") from None
             return proxy_url  # An unlabelled source may already play natively.
+    if strict and "#EXT-X-STREAM-INF:" in text:
+        raise ValueError("此來源的多層播放清單暫不支援 720p 轉換，請使用來源畫質")
     # Validate nested URLs before asking the receiver to load the media.
     rewrite_playlist(text, base, nesthub=not compatible)
     return proxied_media(upstream, f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else "", nesthub=not compatible)
@@ -209,7 +219,7 @@ def nesthub_media_url(proxy_url: str, deadline: float) -> str:
 
 def _nesthub_segment(request: Request, url: str, raw: bytes) -> Response:
     from .nesthub import transcode
-    data = transcode(url, raw)
+    data = transcode(url, raw, web=True) if request.query_params.get("web") == "1" else transcode(url, raw)
     headers = {"Cache-Control": "private, max-age=3600", "Accept-Ranges": "bytes"}
     status = 200
     total = len(data)
@@ -288,7 +298,7 @@ def serve_media(request: Request, raw_url: str) -> Response:
             if not text.lstrip().startswith("#EXTM3U"):
                 raise UnsafeURL("invalid playlist")
             # Absolute nested playlists, AES keys and map URIs work on both receivers.
-            rewritten = rewrite_playlist(text, str(response.url), str(request.base_url).rstrip("/"), nesthub=nesthub)
+            rewritten = rewrite_playlist(text, str(response.url), str(request.base_url).rstrip("/"), nesthub=nesthub, web=request.query_params.get("web") == "1")
             body = rewritten.encode()
             # HEAD describes the rewritten GET representation. An empty Response
             # otherwise advertises Content-Length: 0 to LG's startup probe.

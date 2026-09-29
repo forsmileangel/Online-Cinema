@@ -73,6 +73,10 @@ function withSource(path: string, source?: string) {
 }
 
 export const api = {
+  web720p: (src: string, signal?: AbortSignal) => {
+    const upstream = new URL(src, window.location.origin).searchParams.get("u") || "";
+    return req<{ url: string }>(`/api/playback/720p?u=${encodeURIComponent(upstream)}`, { signal }, 30000);
+  },
   health: () => req<{ ok: boolean }>("/api/health"),
   home: (source?: string, signal?: AbortSignal) =>
     req<HomePayload>(withSource("/api/home", source), { signal }, 35000),

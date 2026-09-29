@@ -1,8 +1,22 @@
 import Hls from "hls.js";
+import { api } from "../api";
 import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type WheelEvent } from "react";
 import type { CastingController } from "../hooks/useCasting";
 
 const VOL_KEY = "cinema.volume";
+const QUALITY_KEY = "cinema.quality";
+
+function loadQuality() {
+  try {
+    const height = Number(localStorage.getItem(QUALITY_KEY));
+    if (Number.isFinite(height) && height > 0) return height;
+  } catch { /* Storage may be disabled. */ }
+  return -1;
+}
+
+function saveQuality(height: number) {
+  try { localStorage.setItem(QUALITY_KEY, String(height)); } catch { /* ignore */ }
+}
 
 function fmt(t: number) {
   if (!Number.isFinite(t) || t < 0) t = 0;
@@ -70,6 +84,39 @@ export function Player({
   const [hoverTime, setHoverTime] = useState(0);
   const [levels, setLevels] = useState<{ h: number; i: number }[]>([]);
   const [level, setLevel] = useState(-1);
+  const [videoHeight, setVideoHeight] = useState(0);
+  const [web720, setWeb720] = useState<{ src: string; url: string } | null>(null);
+  const [qualityBusy, setQualityBusy] = useState(false);
+  const [qualityError, setQualityError] = useState("");
+  const qualityRequest = useRef<AbortController | null>(null);
+  const qualityResume = useRef<{ position: number; paused: boolean } | null>(null);
+  const usingWeb720 = web720?.src === src;
+  const playbackSrc = usingWeb720 ? web720.url : src;
+  const isMp4 = /\.mp4(\b|$)/i.test(decodeURIComponent(src));
+
+  useEffect(() => () => { qualityRequest.current?.abort(); }, [src]);
+
+  async function convert720(preservePlayback: boolean) {
+    qualityRequest.current?.abort();
+    const controller = new AbortController();
+    qualityRequest.current = controller;
+    setQualityBusy(true);
+    setQualityError("");
+    try {
+      const prepared = await api.web720p(src, controller.signal);
+      if (controller.signal.aborted || castingRef.current) return false;
+      const video = videoRef.current;
+      if (preservePlayback && video) qualityResume.current = { position: video.currentTime, paused: video.paused };
+      saveQuality(720);
+      setWeb720({ src, url: prepared.url });
+      return true;
+    } catch (e) {
+      if (!controller.signal.aborted) setQualityError(e instanceof Error ? e.message : "720p 準備失敗，請重試");
+      return false;
+    } finally {
+      if (qualityRequest.current === controller) setQualityBusy(false);
+    }
+  }
   const [playError, setPlayError] = useState("");
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
@@ -143,20 +190,27 @@ export function Player({
     const video = videoRef.current;
     if (!video || !src.startsWith("/api/hls")) return;
     setPlayError("");
+    setQualityError("");
     setLoading(true);
-    setLevels([]);
-    setLevel(-1);
+    setVideoHeight(0);
+    if (!usingWeb720) setLevels([]);
+    setLevel(usingWeb720 ? -4 : -1);
     let hls: Hls | null = null;
     let nativeMetadata: (() => void) | undefined;
-    const start = startAt > 5 ? startAt : 0;
+    const resume = qualityResume.current;
+    qualityResume.current = null;
+    const start = resume?.position ?? (startAt > 5 ? startAt : 0);
+    const beginPlayback = () => {
+      if (resume?.paused) { setLoading(false); return; }
+      if (!castingRef.current) void video.play().catch(() => { setLoading(false); setPlayError("瀏覽器暫停了自動播放，請按播放繼續。"); });
+    };
     video.volume = vol;
     video.muted = muted;
-    const raw = decodeURIComponent(src);
-    if (/\.mp4(\b|$)/i.test(raw)) {
-      video.src = src;
+    if (isMp4) {
+      video.src = playbackSrc;
       const onMeta = () => {
         if (start) video.currentTime = start;
-        if (!castingRef.current) void video.play().catch(() => { setLoading(false); setPlayError("瀏覽器暫停了自動播放，請按播放繼續。"); });
+        beginPlayback();
       };
       video.addEventListener("loadedmetadata", onMeta, { once: true });
       return () => {
@@ -167,6 +221,7 @@ export function Player({
     if (Hls.isSupported()) {
       hls = new Hls({
         enableWorker: true,
+        autoStartLoad: false,
         lowLatencyMode: false,
         startFragPrefetch: true,
         testBandwidth: false,
@@ -179,25 +234,36 @@ export function Player({
           xhr.withCredentials = false;
         },
       });
-      hls.loadSource(src);
-      hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        const ls = hls!.levels
-          .map((l, i) => ({ h: l.height || 0, i }))
-          .filter((x) => x.h);
-        setLevels(ls);
-        if (start) video.currentTime = start;
-        if (!castingRef.current) void video.play().catch(() => { setLoading(false); setPlayError("瀏覽器暫停了自動播放，請按播放繼續。"); });
+        const instance = hls!;
+        const ls = instance.levels.map((l, i) => ({ h: l.height || 0, i })).filter((x) => x.h);
+        if (!usingWeb720) setLevels(ls);
+        const preferred = loadQuality();
+        const matching = ls.filter((l) => l.h <= preferred).sort((a, b) => b.h - a.h)[0];
+        const begin = (selected: number) => {
+          if (hlsRef.current !== instance) return;
+          instance.loadLevel = selected;
+          setLevel(usingWeb720 ? -4 : selected);
+          instance.startLoad(start);
+          beginPlayback();
+        };
+        if (!usingWeb720 && preferred === 720 && !matching) {
+          void convert720(false).then((converted) => { if (!converted) begin(-1); });
+        } else {
+          begin(!usingWeb720 && preferred > 0 ? matching?.i ?? ls[0]?.i ?? -1 : -1);
+        }
       });
       hls.on(Hls.Events.ERROR, (_e, data) => {
         if (data.fatal && !castingRef.current) { setLoading(false); setPlayError("播放來源無法載入"); onErrorRef.current?.(); }
       });
       hlsRef.current = hls;
+      hls.loadSource(playbackSrc);
+      hls.attachMedia(video);
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = src;
+      video.src = playbackSrc;
       nativeMetadata = () => {
         if (start) video.currentTime = start;
-        if (!castingRef.current) void video.play().catch(() => { setLoading(false); setPlayError("瀏覽器暫停了自動播放，請按播放繼續。"); });
+        beginPlayback();
       };
       video.addEventListener("loadedmetadata", nativeMetadata, { once: true });
     }
@@ -208,11 +274,15 @@ export function Player({
     };
     // vol/muted applied once when attaching; later changes go through applyVol
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src, startAt]);
+  }, [src, startAt, playbackSrc]);
 
   useEffect(() => {
     const v = videoRef.current;
-    if (casting) v?.pause();
+    if (casting) {
+      qualityRequest.current?.abort();
+      setQualityBusy(false);
+      v?.pause();
+    }
   }, [casting]);
 
   useEffect(() => {
@@ -403,23 +473,23 @@ export function Player({
 
   function changeLevel(next: number) {
     const hls = hlsRef.current;
-    if (!hls) return;
-    if (next === -2) {
-      const cur = hls.currentLevel;
-      const i = Math.max(-1, cur - 1);
-      hls.currentLevel = i;
-      setLevel(i);
-      return;
+    if (!hls || qualityBusy || casting) return;
+    if (next === -2 || next === -3) {
+      const current = levels.findIndex((l) => l.i === level);
+      const index = Math.max(-1, Math.min(levels.length - 1, current + (next === -2 ? -1 : 1)));
+      next = levels[index]?.i ?? -1;
     }
-    if (next === -3) {
-      const cur = hls.currentLevel < 0 ? hls.levels.length - 1 : hls.currentLevel;
-      const i = Math.min(hls.levels.length - 1, cur + 1);
-      hls.currentLevel = i;
-      setLevel(i);
-      return;
+    if (next === -4) { void convert720(true); return; }
+    saveQuality(levels.find((l) => l.i === next)?.h ?? -1);
+    setQualityError("");
+    if (usingWeb720) {
+      const video = videoRef.current;
+      if (video) qualityResume.current = { position: video.currentTime, paused: video.paused };
+      setWeb720(null);
+    } else {
+      hls.nextLevel = next;
+      setLevel(next);
     }
-    hls.currentLevel = next;
-    setLevel(next);
   }
 
   function bumpUi() {
@@ -480,14 +550,15 @@ export function Player({
       onDoubleClick={onSurfaceDblClick}
       onWheel={onWheel}
     >
-      <video ref={videoRef} playsInline onPlay={() => setPlayError("")} onError={() => { if (!castingRef.current) { setLoading(false); setPlayError("播放來源無法載入"); onErrorRef.current?.(); } }} />
-      {playError && !casting ? <div className="loading-pill" role="status">{playError}</div> : null}
+      <video ref={videoRef} playsInline onResize={(e) => setVideoHeight(e.currentTarget.videoHeight)} onLoadedMetadata={(e) => setVideoHeight(e.currentTarget.videoHeight)} onPlay={() => setPlayError("")} onError={() => { if (!castingRef.current) { setLoading(false); setPlayError("播放來源無法載入"); onErrorRef.current?.(); } }} />
+      {!casting && (qualityBusy || qualityError) ? <div className="loading-pill" role="status">{qualityBusy ? "正在準備 720p…" : qualityError}</div> : null}
+      {playError && !casting && !qualityBusy && !qualityError ? <div className="loading-pill" role="status">{playError}</div> : null}
       {isPaused ? (
         <div className="center-play">
           <span>▶</span>
         </div>
       ) : null}
-      {(casting ? remote?.busy || remote?.status?.buffering : loading) ? <div className="loading-pill">{casting ? "等待電視確認" : "載入中"}</div> : null}
+      {!qualityBusy && !qualityError && (casting ? remote?.busy || remote?.status?.buffering : loading) ? <div className="loading-pill">{casting ? "等待電視確認" : "載入中"}</div> : null}
       <div className="overlay">
         <div className="controls">
           <div
@@ -557,20 +628,19 @@ export function Player({
               <span className="times">{Math.round(shownVol * 100)}</span>
             </div> : <span className="times">{remote?.uncertain ? "音量暫不可用" : remote?.status?.can_set_volume === false ? "音量請用遙控器" : "讀取投放音量…"}</span>}
             <span className="spacer" />
-            {casting ? <span className="quality-status" aria-label="投放畫質" title="投放端處理畫質；本機畫質選單只適用於本機播放">{castQuality}</span> : levels.length > 1 ? <select
+            {casting ? <span className="quality-status" aria-label="投放畫質" title="投放端處理畫質；本機畫質選單只適用於本機播放">{castQuality}</span> : !isMp4 && Hls.isSupported() ? <select
               className="field"
               aria-label="播放畫質"
+              title="記住畫質供下次播放使用；720p 轉換需要電腦處理，部分片源不支援"
+              disabled={qualityBusy}
               value={level}
               onChange={(e) => changeLevel(Number(e.target.value))}
               onClick={(e) => e.stopPropagation()}
             >
-              <option value={-1}>自動</option>
-              {levels.map((l) => (
-                <option key={l.i} value={l.i}>
-                  {l.h}p
-                </option>
-              ))}
-            </select> : <span className="quality-status" aria-label="播放畫質">{levels.length === 1 ? `${levels[0].h}p` : "來源畫質"}</span>}
+              <option value={-1}>{levels.length > 1 ? "自動" : !usingWeb720 && videoHeight ? `來源 ${videoHeight}p` : "來源畫質"}</option>
+              {levels.map((l) => <option key={l.i} value={l.i}>{l.h}p</option>)}
+              {!levels.some((l) => l.h <= 720) ? <option value={-4}>720p（轉換）</option> : null}
+            </select> : <span className="quality-status" aria-label="播放畫質">{videoHeight ? `來源 ${videoHeight}p` : "來源畫質"}</span>}
             <div className="fs-col" onClick={(e) => e.stopPropagation()}>
               <button type="button" onClick={(e) => { e.stopPropagation(); toggleFs(); }}>
                 全螢幕

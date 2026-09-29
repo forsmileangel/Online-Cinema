@@ -527,6 +527,21 @@ def image_proxy(u: str = Query(..., max_length=500)):
         raise _err(e) from e
 
 
+@app.get("/api/playback/720p")
+def web_720p(u: str = Query(..., max_length=4000)):
+    import time
+    try:
+        original = hls_proxy.proxied_media(u)
+        url = hls_proxy.nesthub_media_url(original, time.monotonic() + 25, strict=True)
+        return {"url": url + "&web=1" if parse_qs(urlparse(url).query).get("nesthub") == ["1"] else url}
+    except (UnsafeURL, SiteBusy, TimeoutError) as e:
+        raise _err(e) from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    except Exception as e:
+        raise _err(e) from e
+
+
 @app.api_route("/api/hls", methods=["GET", "HEAD"])
 def hls_proxy_ep(request: Request, u: str = Query(..., max_length=4000)):
     try:

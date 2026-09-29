@@ -339,7 +339,7 @@ export function Watch() {
             )}
             {episodeError ? <p className="banner err" role="alert">{episodeError} <button className="btn" onClick={retryEpisode}>重試這一集</button></p> : null}
           </div>
-          <CastBar controller={cast} currentEpisode={currentEp?.title} />
+          <CastBar controller={cast} currentEpisode={currentEp?.title} currentTitle={title} />
         </div>
         {manyEps ? (
           <aside className="ep-rail" aria-label="選集">

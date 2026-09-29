@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import type { CastingController } from "../hooks/useCasting";
 
-export function CastBar({ controller, currentEpisode }: { controller: CastingController; currentEpisode?: string }) {
+export function CastBar({ controller, currentEpisode, currentTitle }: { controller: CastingController; currentEpisode?: string; currentTitle?: string }) {
   const { devices, selected, setSelected, busy, active, status, msg, uncertain, canControl,
     scan, play, control, returnToLocal } = controller;
   const device = devices.find((d) => d.uuid === selected);
@@ -32,6 +32,7 @@ export function CastBar({ controller, currentEpisode }: { controller: CastingCon
           {status?.phase === "error" ? <button className="btn alt" disabled={busy} onClick={() => void controller.retry()}>重試這一集</button> : null}
           {uncertain || status?.idle || status?.phase === "stopped" || status?.phase === "ended" ? <button className="btn alt" type="button" disabled={busy} onClick={() => void returnToLocal()}>我已用遙控器停止，回本機</button> : null}
         </> : null}
+        {currentTitle ? <span className="cast-current-title" title={currentTitle} aria-live="polite" style={{ flex: "1 1 180px", minWidth: 0, overflowWrap: "anywhere", fontWeight: 600, lineHeight: 1.4 }}>{currentTitle}</span> : null}
         {currentEpisode ? <span className="cast-current-episode" aria-live="polite">目前播放：{currentEpisode}</span> : null}
       </div>
       {device?.manual_power_on ? <p className="muted">這台電視需手動開機。請先用遙控器開機，再按「掃描電視」後投放。</p> : null}

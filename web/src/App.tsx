@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { TopBar } from "./components/TopBar";
+import { PhonePair } from "./components/PhoneConnection";
 import { TvKeys } from "./components/TvKeys";
 import { Browse } from "./pages/Browse";
 import { Favorites } from "./pages/Favorites";
@@ -61,6 +62,7 @@ export function App() {
       <TopBar />
       <main className={watch ? "page page-watch" : "page"}>
         <Routes>
+          <Route path="/connect" element={<PhonePair />} />
           {appRoutes("")}
           {appRoutes("/tv")}
           <Route path="*" element={<Navigate to="/" replace />} />

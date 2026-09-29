@@ -73,6 +73,14 @@ button { cursor: pointer; }
 .picks-title { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
 .home-row { overflow: hidden; margin-bottom: 28px; }
 .muted { color: var(--muted); }
+.phone-connection { margin-top: 24px; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+.phone-connection .row-head { align-items: center; gap: 12px; flex-wrap: wrap; }
+.phone-address { padding: 14px 0; border-top: 1px solid var(--line); }
+.phone-address-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 12px; }
+.phone-address-head a { color: var(--accent-2); font-weight: 600; overflow-wrap: anywhere; }
+.phone-link-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.phone-link-row input { flex: 1 1 220px; min-width: 0; width: 100%; }
+.phone-link-row button { flex-shrink: 0; }
 .row-head {
   display: flex; align-items: baseline; justify-content: space-between;
   margin: 8px 0 12px;

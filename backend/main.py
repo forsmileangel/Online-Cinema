@@ -333,6 +333,20 @@ def get_settings():
     )
 
 
+@app.get("/api/connection")
+def get_connection():
+    enabled = db.get_setting("lan_tv", "") == "1"
+    code = tv_session.ensure_code() if enabled else ""
+    addresses = []
+    for ip in lan.ipv4_lan():
+        url = f"http://{ip}:{S.PORT}"
+        addresses.append({"ip": ip, "url": url,
+                          "connect_url": f"{url}/connect?c={code}" if enabled else "",
+                          "listening": enabled and lan.port_open(ip, S.PORT)})
+    return JSONResponse({"enabled": enabled, "port": S.PORT, "addresses": addresses},
+                        headers={"Cache-Control": "no-store"})
+
+
 @app.put("/api/settings")
 def put_settings(body: SettingsIn):
     try:

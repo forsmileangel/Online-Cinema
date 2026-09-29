@@ -18,6 +18,11 @@ export type CastStatus = {
 };
 
 export type CastDevice = { uuid: string; name: string; host: string; kind: string; online: boolean; mac: string; can_wake: boolean; model?: string; location?: string; manual_power_on?: boolean };
+export type ConnectionInfo = {
+  enabled: boolean;
+  port: number;
+  addresses: { ip: string; url: string; connect_url: string; listening: boolean }[];
+};
 export type CastSession = CastStatus & {
   session_id: string; phase: string; error: string; pending_action: string;
   source: string; video_id: string; episode_id: string; autoplay_next: boolean; playlist: string;
@@ -100,6 +105,7 @@ export const api = {
   }) => req("/api/history", { method: "PUT", body: JSON.stringify(body) }),
   clearHistory: () => req("/api/history", { method: "DELETE" }),
   settings: () => req<Settings>("/api/settings"),
+  connection: (signal?: AbortSignal) => req<ConnectionInfo>("/api/connection", { signal, cache: "no-store" }, 10000),
   saveSettings: (body: {
     source?: string;
     theme?: string;

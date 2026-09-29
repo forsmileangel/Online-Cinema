@@ -9,7 +9,8 @@ def _ok_lan(ip: str) -> bool:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
-    return bool(addr.is_private and not addr.is_loopback and not addr.is_link_local)
+    return bool(addr.version == 4 and addr.is_private and not addr.is_loopback
+                and not addr.is_link_local and not addr.is_unspecified and not addr.is_multicast)
 
 
 def ipv4_lan() -> list[str]:
@@ -33,6 +34,14 @@ def ipv4_lan() -> list[str]:
         pass
     found.sort(key=lambda x: (0 if x.startswith("192.168.") else 1 if x.startswith("10.") else 2, x))
     return found
+
+
+def port_open(ip: str, port: int) -> bool:
+    try:
+        with socket.create_connection((ip, port), timeout=.4):
+            return True
+    except OSError:
+        return False
 
 
 def is_allowed_client(ip: str) -> bool:

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { Settings } from "../types";
+import { PhoneConnection } from "../components/PhoneConnection";
 import {
   PRESETS,
   TOKEN_LABELS,
@@ -48,7 +49,8 @@ export function SettingsPage() {
   return (
     <div>
       <h1 className="h1">設定</h1>
-      <p className="muted">{s.lan_tv ? "已允許區網投放；服務重啟後生效。" : "目前僅限本機連線。"} 瀏覽器不會開啟原站廣告腳本。</p>
+      <p className="muted">{s.lan_tv ? "已允許區網連線。" : "目前僅限本機連線。"} 瀏覽器不會開啟原站廣告腳本。</p>
+      <PhoneConnection enabled={s.lan_tv} code={s.tv_code} />
 
       <h2 className="h1" style={{ fontSize: 20, marginTop: 28 }}>外觀</h2>
       <p className="muted">先選一套模板，再用下面的色盤微調。</p>

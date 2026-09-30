@@ -28,10 +28,10 @@ export function NextEpisodeBuffer({ url, title, enabled, castSession, qualityKey
         let ahead = 0;
         if (video) {
           for (let i = 0; i < video.buffered.length; i++) {
-            if (video.buffered.start(i) <= video.currentTime && video.buffered.end(i) > video.currentTime) ahead = video.buffered.end(i) - video.currentTime;
+            if (video.buffered.start(i) <= video.currentTime + 0.25 && video.buffered.end(i) > video.currentTime) ahead = video.buffered.end(i) - video.currentTime;
           }
         }
-        const ready = !!video && !video.paused && !video.ended && video.readyState >= 3 &&
+        const ready = !!video && !video.ended && video.readyState >= 3 &&
           (ahead >= 60 || (video.duration > 0 && video.duration - video.currentTime < 60 && ahead >= video.duration - video.currentTime - 0.5));
         let height = 0;
         try { height = Math.max(0, Number(localStorage.getItem(qualityKey)) || 0); } catch { /* source quality */ }

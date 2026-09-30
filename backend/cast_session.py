@@ -87,7 +87,7 @@ class PlaybackSession:
             next_buffer.cancel(owner)
             return
         state = self.snapshot
-        ready = bool(state.get("playing") and not state.get("buffering") and state.get("current_time", 0) >= 30)
+        ready = bool(not state.get("buffering") and (state.get("paused") or (state.get("playing") and state.get("current_time", 0) >= 30)))
         try:
             next_buffer.update(owner, self.prefetched[2].playlist, ready,
                                720 if "nesthub=1" in state.get("content_id", "") else 0)

@@ -143,15 +143,15 @@ class NextBufferTests(unittest.TestCase):
                 self.assertEqual(transcode.call_args.args[2],b'0123456789')
         fetch.assert_not_called()
 
-    def test_cast_preload_survives_browser_absence_and_stops_on_pause_or_stop(self):
+    def test_cast_preload_continues_while_paused_and_stops_on_stop(self):
         session=cast_session.PlaybackSession(dict(uuid='fake',source='gimy',video_id='1',autoplay_next=True))
         detail=VideoDetail(id='1',title='Neutral',cover='',playlist=PROXY)
         session.prefetched=('2',time.monotonic(),detail)
         with patch.object(nb,'update') as update, patch.object(nb,'cancel') as cancel:
             session.snapshot.update(phase='playing',playing=True,current_time=40)
             session.warm_next();self.assertTrue(update.call_args.args[2])
-            session.snapshot.update(phase='paused',playing=False)
-            session.warm_next();self.assertFalse(update.call_args.args[2])
+            session.snapshot.update(phase='paused',playing=False,paused=True,current_time=0)
+            session.warm_next();self.assertTrue(update.call_args.args[2])
             session.snapshot.update(phase='stopped')
             session.warm_next();cancel.assert_called()
 

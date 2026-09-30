@@ -21,7 +21,7 @@ class SourceTests(unittest.TestCase):
             self.assertEqual({item["source"] for item in db.list_history()}, {"hongguo", "gimy"})
             self.assertEqual([item["video_id"] for item in db.list_history(source="hongguo")], ["clip"])
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM favorites").fetchone()[0], 3)
-        self.assertEqual({item["id"] for item in sites.available()}, {"hongguo", "chinaq", "gimy", "dramaq"})
+        self.assertEqual({item["id"] for item in sites.available()}, {"hongguo", "chinaq", "gimy", "dramaq", "mmov"})
 
 
 if __name__ == "__main__":

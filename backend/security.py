@@ -24,6 +24,7 @@ GIMY_CDN_RE = re.compile(
 DRAMASQ_CDN_RE = re.compile(r"(?:^|\.)(?:bfvvs\.com|kuktxu\.com)$")
 _EXTRA_MEDIA_TTL = 3600.0
 _extra_media_hosts: dict[str, float] = {}
+_extra_media_sources: dict[str, str] = {}
 _extra_media_lock = threading.RLock()
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -163,14 +164,26 @@ def assert_image_url(url: str) -> str:
     return assert_https_url(url, IMAGE_HOSTS)
 
 
-def remember_media_host(host: str) -> None:
+def remember_media_host(host: str, *, source: str = "") -> None:
     h = (host or "").lower().rstrip(".")
     if h:
         now = time.monotonic()
         with _extra_media_lock:
             for expired in [key for key, until in _extra_media_hosts.items() if until <= now]:
                 del _extra_media_hosts[expired]
+                _extra_media_sources.pop(expired, None)
             _extra_media_hosts[h] = now + _EXTRA_MEDIA_TTL
+            if source:
+                _extra_media_sources[h] = source
+
+
+def media_host_source(host: str) -> str:
+    h = (host or "").lower().rstrip(".")
+    with _extra_media_lock:
+        if _extra_media_hosts.get(h, 0) > time.monotonic():
+            return _extra_media_sources.get(h, "")
+        _extra_media_sources.pop(h, None)
+        return ""
 
 
 def touch_media_host(url: str) -> None:
@@ -200,6 +213,7 @@ def is_chinaq_cdn(host: str) -> bool:
         if _extra_media_hosts.get(h, 0) > time.monotonic():
             return True
         _extra_media_hosts.pop(h, None)
+        _extra_media_sources.pop(h, None)
         return False
 
 

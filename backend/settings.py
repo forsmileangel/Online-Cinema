@@ -27,6 +27,8 @@ CDN_HOSTS = (
 )
 
 IMAGE_HOSTS = (
+    "img.mmov.app",
+    "image.mmov.app",
     "picbf.com",
     "wangwangzyimg.com",
     "hongguoapp.cn",

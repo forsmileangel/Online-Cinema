@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from . import cast, catalog, db, hls_proxy, sites
 from .security import SiteBusy, assert_hls_url, safe_video_id
 
-SERIES_SOURCES = {"hongguo", "chinaq", "gimy", "dramaq"}
+SERIES_SOURCES = {"hongguo", "chinaq", "gimy", "dramaq", "mmov"}
 TERMINAL = {"ended", "stopped", "error", "replaced"}
 
 

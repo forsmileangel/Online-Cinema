@@ -22,6 +22,7 @@ from .security import (
     is_dramaq_cdn,
     is_gimy_cdn,
     remember_media_host,
+    media_host_source,
 )
 
 _URI_ATTR = re.compile(r'URI="([^"]+)"')
@@ -41,8 +42,9 @@ def proxied_media(url: str, origin: str = "", *, nesthub: bool = False, web: boo
 
 
 def _playlist_media_url(url: str, parent_host: str) -> str:
+    source = media_host_source(parent_host)
     try:
-        return assert_hls_url(url)
+        validated = assert_hls_url(url)
     except UnsafeURL:
         if not (is_chinaq_cdn(parent_host) or is_dramaq_cdn(parent_host)):
             raise
@@ -52,8 +54,13 @@ def _playlist_media_url(url: str, parent_host: str) -> str:
         if not host or not path.endswith((".m3u8", ".ts", ".m4s", ".key", ".jpeg", ".jpg", ".mp4")):
             raise
         assert_https_url(url, {host})
-        remember_media_host(host)
-        return assert_hls_url(url)
+        remember_media_host(host, source=source)
+        validated = assert_hls_url(url)
+    if source:
+        # Carry the source Referer across nested playlists, keys and segments,
+        # including hosts that were already allowed by the static policy.
+        remember_media_host(urlparse(validated).hostname or "", source=source)
+    return validated
 
 
 def rewrite_playlist(text: str, base_url: str, origin: str = "", *, nesthub: bool = False, web: bool = False) -> str:
@@ -85,6 +92,8 @@ def rewrite_playlist(text: str, base_url: str, origin: str = "", *, nesthub: boo
 
 def _media_context(url: str) -> tuple[str, str | None]:
     host = (urlparse(url).hostname or "").lower()
+    if media_host_source(host) == "mmov":
+        return "https://hk.mmov.io/", "chrome131"
     if any(part in host for part in ("bfllvip", "fengbao", "baofeng", "ppqrrs", "10cong", "wangwangzyvod", "hongguoapp")):
         return "https://www.hongguoapp.cn/", "chrome131"
     if is_gimy_cdn(host) or "gimyai" in host or host.endswith("gimy.tw"):

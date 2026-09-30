@@ -495,7 +495,10 @@ def image_proxy(u: str = Query(..., max_length=500)):
     try:
         url = assert_image_url(unquote(u))
         host = (urlparse(url).hostname or "").lower()
-        if "picbf" in host or "wangwangzyimg" in host or "hongguoapp" in host:
+        if host in {"img.mmov.app", "image.mmov.app"}:
+            referer = "https://hk.mmov.app/"
+            imp = "chrome131"
+        elif "picbf" in host or "wangwangzyimg" in host or "hongguoapp" in host:
             referer = "https://www.hongguoapp.cn/"
             imp = "chrome131"
         elif host.endswith("1777cdn.com") or host.endswith("gimyai.tw"):

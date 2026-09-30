@@ -20,6 +20,7 @@ const DEFAULT_SOURCES: Src[] = [
   { id: "hongguo", label: "紅果短劇" },
   { id: "chinaq", label: "中國人線上看" },
   { id: "gimy", label: "Gimy 劇迷" },
+  { id: "mmov", label: "MMOV 電影線上看" },
   { id: "dramaq", label: "DramaQ" },
 ];
 

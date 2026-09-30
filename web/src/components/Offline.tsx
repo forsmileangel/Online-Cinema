@@ -4,8 +4,8 @@ import { useSource } from "../source";
 import type { Episode } from "../types";
 import "./Offline.css";
 
-type Download = { id: string; source: string; video_id: string; episode: string; title: string; episode_title: string; height: number; phase: string; progress: number; error: string; url?: string; size?: number };
-const active = (item: Download) => ["queued", "downloading", "preparing"].includes(item.phase);
+type Download = { id: string; source: string; video_id: string; episode: string; title: string; episode_title: string; height: number; phase: string; progress: number; error: string; url?: string; size?: number; retry_attempt?: number; retry_at?: number };
+const active = (item: Download) => ["queued", "downloading", "retrying", "preparing"].includes(item.phase);
 async function request(url: string, body?: object, method = "GET") {
   const response = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
   const result = await response.json();
@@ -34,6 +34,7 @@ function useDownloads(source?: string, id?: string) {
   return { items, error, refresh: () => setRevision(n => n + 1) };
 }
 function label(item: Download) {
+  if (item.phase === "retrying") return `自動續傳中 · 已保留 ${item.progress}% · 第 ${item.retry_attempt || 1} 次重試 · 約 ${Math.max(0, Math.ceil((item.retry_at || 0) - Date.now() / 1000))} 秒後重連`;
   return item.phase === "complete" ? "已下載 · 優先本地播放" : item.phase === "queued" ? "等待下載" : item.phase === "preparing" ? "正在整理 MP4，尚未完成" : item.phase === "downloading" ? `下載中 ${item.progress}%` : item.error || "下載中斷";
 }
 function DownloadRow({ item, refresh }: { item: Download; refresh: () => void }) {

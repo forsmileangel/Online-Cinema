@@ -108,7 +108,7 @@ class OfflineTests(unittest.TestCase):
     def test_refusal_invalid_html_partial_and_private_sources_never_publish(self):
         for data, length in [(b'<html>denied</html>', '19'), (b'partial', '99')]:
             response = Mock(status_code=200, headers={'content-length': length}, iter_content=lambda **kw: iter([data]))
-            with patch.object(offline.http_client, 'fetch_bytes', return_value=response), self.assertRaises(ValueError):
+            with patch.object(offline.http_client, 'fetch_bytes', return_value=response), patch.object(offline, '_wait_retry'), self.assertRaises(ValueError):
                 offline._download(URL, offline.ROOT / 'part', offline.ROOT)
         with patch.object(offline.http_client, 'fetch_bytes', side_effect=security.SiteBusy('source', 429, 30)) as fetch, self.assertRaises(security.SiteBusy):
             offline._download(URL, offline.ROOT / 'part', offline.ROOT)
@@ -191,7 +191,7 @@ class OfflineTests(unittest.TestCase):
         finally: offline._release(handle)
         self.assertEqual(offline.delete([second], {'dramaq'})['deleted'], [])
 
-    def test_hls_resume_reuses_verified_segments_and_rejects_changed_playlist(self):
+    def test_hls_resume_reuses_verified_segments_without_reselecting_playlist(self):
         work = offline.ROOT / 'parts'; work.mkdir()
         leaf = '#EXTM3U\n#EXTINF:10,\na.ts\n#EXTINF:10,\nb.ts\n#EXT-X-ENDLIST\n'
         def response(data):
@@ -207,9 +207,9 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(fetch.call_count, 1)
         self.assertTrue(fetch.call_args.args[0].endswith('/b.ts'))
         progress.assert_called_with(100)
-        with patch.object(hls_proxy, '_read_playlist', return_value=(leaf.replace('a.ts', 'new.ts'), URL)), patch.object(offline.http_client, 'fetch_bytes') as fetch:
-            with self.assertRaisesRegex(ValueError, '重新下載'):
-                offline._hls(URL, work, offline.ROOT, 720, Mock())
+        with patch.object(hls_proxy, '_read_playlist', side_effect=AssertionError('must retain saved rendition')) as read, patch.object(offline.http_client, 'fetch_bytes') as fetch:
+            offline._hls(URL, work, offline.ROOT, 720, Mock())
+            read.assert_not_called()
             fetch.assert_not_called()
         self.assertEqual((work / '000000.ts').read_bytes(), b'first')
         # A damaged local segment is fetched again, rather than silently reused.
@@ -270,7 +270,7 @@ class OfflineTests(unittest.TestCase):
         job = offline.enqueue('gimy', 'test', '1')
         _, handle = offline._queue.get()
         folder = offline._folder(job['id'])
-        def interrupted(url, work, folder, height, progress):
+        def interrupted(url, work, folder, height, progress, **kwargs):
             (work / '000000.ts').write_bytes(b'part')
             progress(50)
             raise offline.Cancelled()
@@ -290,6 +290,116 @@ class OfflineTests(unittest.TestCase):
             self.assertFalse((folder / 'parts').exists())
         finally:
             _, handle = offline._queue.get(); offline._release(handle)
+
+    def test_valid_full_206_segment_is_accepted_and_invalid_range_is_not_retried(self):
+        path = offline.ROOT / 'segment.ts'
+        good = Mock(status_code=206, headers={'content-length': '5', 'content-range': 'bytes 0-4/5', 'etag': '"v1"'}, iter_content=lambda **kw: iter([b'first']))
+        with patch.object(offline.http_client, 'fetch_bytes', return_value=good) as fetch:
+            offline._download(URL, path, offline.ROOT)
+        self.assertEqual(path.read_bytes(), b'first')
+        self.assertEqual(fetch.call_count, 1)
+        self.assertTrue(offline._read(path.with_name(path.name + '.download.json'))['complete'])
+        bad = Mock(status_code=206, headers={'content-length': '4', 'content-range': 'bytes 1-4/5'})
+        with patch.object(offline.http_client, 'fetch_bytes', return_value=bad) as fetch, self.assertRaisesRegex(ValueError, '無效'):
+            offline._download(URL, offline.ROOT / 'bad.ts', offline.ROOT)
+        self.assertEqual(fetch.call_count, 1)
+
+    def test_incomplete_mp4_automatically_resumes_saved_bytes_with_range(self):
+        path = offline.ROOT / 'source.mp4'
+        first = Mock(status_code=200, headers={'content-length': '10', 'etag': '"v1"'}, iter_content=lambda **kw: iter([b'01234']))
+        tail = Mock(status_code=206, headers={'content-length': '5', 'content-range': 'bytes 5-9/10', 'etag': '"v1"'}, iter_content=lambda **kw: iter([b'56789']))
+        retry, progress = Mock(), Mock()
+        with patch.object(offline.http_client, 'fetch_bytes', side_effect=[first, tail]) as fetch, patch.object(offline, '_wait_retry'):
+            offline._download(URL, path, offline.ROOT, resume_partial=True, progress=progress, on_retry=retry)
+        self.assertEqual(path.read_bytes(), b'0123456789')
+        self.assertEqual(fetch.call_args.kwargs['range_header'], 'bytes=5-')
+        self.assertEqual(fetch.call_args.kwargs['if_range'], '"v1"')
+        self.assertEqual(retry.call_count, 1)
+        self.assertEqual(progress.call_args_list[-1].args, (100.0,))
+        self.assertTrue(offline._read(path.with_name(path.name + '.download.json'))['complete'])
+
+    def test_hls_timeout_resumes_only_current_segment_without_resetting_saved_progress(self):
+        work = offline.ROOT / 'parts'; work.mkdir()
+        leaf = '#EXTM3U\n#EXTINF:10,\na.ts\n#EXTINF:10,\nb.ts\n#EXT-X-ENDLIST\n'
+        offline._write(work / 'plan.json', {'lines': leaf.replace('a.ts', '000000.ts').replace('b.ts', '000001.ts').splitlines(), 'resources': [[URL.replace('index.m3u8', 'a.ts'), '000000.ts'], [URL.replace('index.m3u8', 'b.ts'), '000001.ts']]})
+        first = work / '000000.ts'; first.write_bytes(b'first')
+        offline._write(first.with_name(first.name + '.download.json'), {'url': URL.replace('index.m3u8', 'a.ts'), 'complete': True, 'size': 5, 'sha256': offline._file_hash(first)})
+        def chunks(**kwargs):
+            yield b'01234'
+            raise TimeoutError('connection timed out')
+        response = Mock(status_code=200, headers={'content-length': '10', 'etag': '"v1"'}, iter_content=chunks)
+        tail = Mock(status_code=206, headers={'content-length': '5', 'content-range': 'bytes 5-9/10', 'etag': '"v1"'}, iter_content=lambda **kw: iter([b'56789']))
+        progress, retry = Mock(), Mock()
+        with patch.object(hls_proxy, '_read_playlist', side_effect=AssertionError('no line reselection')), patch.object(offline.http_client, 'fetch_bytes', side_effect=[response, tail]) as fetch, patch.object(offline, '_wait_retry'):
+            _, duration = offline._hls(URL, work, offline.ROOT, 720, progress, on_retry=retry)
+        self.assertEqual(duration, 20)
+        self.assertEqual(fetch.call_count, 2)
+        self.assertTrue(all(call.args[0].endswith('/b.ts') for call in fetch.call_args_list))
+        self.assertEqual(fetch.call_args.kwargs['range_header'], 'bytes=5-')
+        self.assertEqual((work / '000001.ts').read_bytes(), b'0123456789')
+        self.assertEqual(progress.call_args_list[0].args, (50.0,))
+        self.assertTrue(all(call.args[0] >= 50 for call in progress.call_args_list))
+        self.assertEqual(retry.call_count, 1)
+
+    def test_automatic_retry_stops_refusal_and_bounds_failures_but_allows_advancing_downloads(self):
+        for error in (security.SiteBusy('source', 403), security.SiteBusy('source', 429, 30), security.UnsafeURL('private')):
+            operation, wait = Mock(side_effect=error), Mock()
+            with patch.object(offline, '_wait_retry', wait), self.assertRaises(type(error)):
+                offline._retry(operation, offline.ROOT)
+            self.assertEqual(operation.call_count, 1)
+            wait.assert_not_called()
+        for error in (TimeoutError('timeout'), offline.http_client.requests.RequestsError('curl timeout', code=28)):
+            with patch.object(offline, '_wait_retry') as wait, self.assertRaisesRegex(ValueError, '仍無進展'):
+                offline._retry(Mock(side_effect=error), offline.ROOT)
+            self.assertEqual(wait.call_count, 8)
+            self.assertEqual([call.args[1] for call in wait.call_args_list], [2, 4, 8, 16, 30, 30, 30, 30])
+        state = {'bytes': 0}
+        def advances():
+            state['bytes'] += 1
+            if state['bytes'] < 12: raise TimeoutError('interrupted')
+            return 'done'
+        with patch.object(offline, '_wait_retry'):
+            self.assertEqual(offline._retry(advances, offline.ROOT, position=lambda: state['bytes']), 'done')
+
+    def test_saved_source_survives_interruption_and_resume_does_not_resolve_again(self):
+        job = offline.enqueue('gimy', 'test', '1')
+        _, handle = offline._queue.get()
+        folder = offline._folder(job['id'])
+        try:
+            with patch.object(offline, 'fetch_detail', return_value=self.detail), patch.object(offline, '_hls', side_effect=RuntimeError('interrupted')):
+                offline._run(job)
+            self.assertTrue((folder / 'parts/source.json').exists())
+        finally: offline._release(handle)
+        job = offline.enqueue('gimy', 'test', '1', height=0)
+        self.assertEqual(job['height'], 720)
+        _, handle = offline._queue.get()
+        def convert(input_path, output, *args): output.write_bytes(b'complete')
+        try:
+            with patch.object(offline, 'fetch_detail', side_effect=AssertionError('must use saved source')), patch.object(offline, '_hls', return_value=(folder / 'parts/index.m3u8', 20)), patch.object(offline, '_convert', side_effect=convert):
+                offline._run(job)
+            self.assertEqual(offline.status(job['id'])['phase'], 'complete')
+        finally: offline._release(handle)
+
+    def test_retry_wait_can_be_cancelled_and_keeps_partial_input_unpublished(self):
+        job = offline.enqueue('gimy', 'test', '1')
+        _, handle = offline._queue.get()
+        folder = offline._folder(job['id'])
+        wait = offline._wait_retry
+        def cancel_during_wait(folder, delay):
+            state = offline.status(job['id'])
+            self.assertEqual(state['phase'], 'retrying')
+            offline.cancel(job['id'])
+            wait(folder, delay)
+        mp4 = '/api/hls?u=https%3A%2F%2Foffline.example%2Fsource.mp4'
+        detail = self.detail.model_copy(deep=True); detail.episodes[0].playlist = mp4
+        response = Mock(status_code=200, headers={'content-length': '10', 'etag': '"v1"'}, iter_content=lambda **kw: iter([b'01234']))
+        try:
+            with patch.object(offline, 'fetch_detail', return_value=detail), patch.object(offline.http_client, 'fetch_bytes', return_value=response), patch.object(offline, '_wait_retry', side_effect=cancel_during_wait):
+                offline._run(job)
+            self.assertEqual(offline.status(job['id'])['phase'], 'cancelled')
+            self.assertEqual((folder / 'parts/source.mp4').read_bytes(), b'01234')
+            with self.assertRaises(FileNotFoundError): offline.media_path(job['id'])
+        finally: offline._release(handle)
 
     def test_windows_atomic_replace_retries_brief_file_locks(self):
         original = Path.replace

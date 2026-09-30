@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 from . import hls_proxy, http_client, sites, next_buffer
 from .models import VideoDetail
-from .security import assert_hls_url, hls_allowed_hosts
+from .security import UnsafeURL, SiteBusy, assert_hls_url, hls_allowed_hosts
 
 ROOT = Path(r'D:\AI工作區\離線影片')
 # Only user-selected metadata is queued; the single worker downloads serially.
@@ -118,7 +118,7 @@ def status(key):
     item = _read(folder / 'status.json')
     if not item:
         return None
-    if item['phase'] in ('queued', 'downloading', 'preparing'):
+    if item['phase'] in ('queued', 'downloading', 'retrying', 'preparing'):
         handle = _claim(folder)
         if handle:
             _release(handle)
@@ -209,7 +209,8 @@ def enqueue(source, video_id, episode='', height=720, restart=False):
                 episode_title=episode, height=height, phase='queued', progress=0, error='', created=time.time())
     if existing:
         item.update(title=existing.get('title', video_id), episode_title=existing.get('episode_title', episode),
-                    progress=0 if restart else existing.get('progress', 0))
+                    progress=0 if restart else existing.get('progress', 0),
+                    height=height if restart else existing.get('height', height))
     try:
         if restart:
             work = folder / 'parts'
@@ -232,7 +233,7 @@ def enqueue(source, video_id, episode='', height=720, restart=False):
 
 def cancel(key):
     item = status(key)
-    if item and item['phase'] in ('queued', 'downloading', 'preparing'):
+    if item and item['phase'] in ('queued', 'downloading', 'retrying', 'preparing'):
         (_folder(key) / 'cancel').touch()
 
 
@@ -285,7 +286,63 @@ def _file_hash(path):
     return digest.hexdigest()
 
 
-def _download(url, path, folder, limit=None, *, resume_partial=False, progress=None):
+class DownloadInterrupted(ValueError):
+    pass
+
+
+def _transient(error):
+    if isinstance(error, (DownloadInterrupted, TimeoutError, ConnectionError)):
+        return True
+    if isinstance(error, (Cancelled, UnsafeURL, SiteBusy)):
+        return False
+    requests = http_client.requests
+    return isinstance(error, requests.RequestsError) and (
+        error.code in {5, 6, 7, 16, 18, 28, 52, 55, 56, 92}
+        or getattr(getattr(error, 'response', None), 'status_code', None) in {500, 502, 504})
+
+
+def _wait_retry(folder, delay):
+    until = time.monotonic() + delay
+    while time.monotonic() < until:
+        _check(folder)
+        time.sleep(min(.25, max(0, until - time.monotonic())))
+    _check(folder)
+
+
+def _retry(operation, folder, on_retry=None, position=None):
+    failures, attempts = 0, 0
+    best = position() if position else 0
+    while True:
+        _check(folder)
+        try:
+            return operation()
+        except Exception as error:
+            if not _transient(error):
+                raise
+            current = position() if position else 0
+            failures = 0 if current > best else failures + 1
+            best = max(best, current)
+            if failures > 8:
+                raise ValueError('自動續傳多次仍無進展；已下載部分保留，可稍後繼續下載') from error
+            attempts += 1
+            delay = min(30, 2 ** max(1, failures))
+            if on_retry: on_retry(attempts, delay, error)
+            _wait_retry(folder, delay)
+
+
+def _completed(path, url):
+    previous = _read(path.with_name(path.name + '.download.json')) or {}
+    return (not path.is_symlink() and path.exists() and previous.get('complete')
+            and previous.get('url') == url and path.stat().st_size > 0
+            and path.stat().st_size == previous.get('size') and _file_hash(path) == previous.get('sha256'))
+
+
+def _download(url, path, folder, limit=None, *, resume_partial=False, progress=None, on_retry=None):
+    return _retry(lambda: _download_once(url, path, folder, limit, resume_partial=resume_partial, progress=progress),
+                  folder, on_retry, lambda: path.stat().st_size if path.exists() else 0)
+
+
+def _download_once(url, path, folder, limit=None, *, resume_partial=False, progress=None):
     assert_hls_url(url)
     _check(folder)
     if path.is_symlink() or path.resolve().parent != path.parent.resolve():
@@ -299,11 +356,14 @@ def _download(url, path, folder, limit=None, *, resume_partial=False, progress=N
         return
     offset = 0
     validator = previous.get('etag', '')
-    if resume_partial and size:
+    resumable = (previous.get('url') == url and isinstance(validator, str)
+                 and validator.startswith('"') and validator.endswith('"')
+                 and isinstance(previous.get('total'), int))
+    if size and (resume_partial or resumable):
         # If-Range requires a strong validator. Never append an unknown/new file.
         if (previous.get('url') != url or not isinstance(validator, str) or not validator.startswith('"') or not validator.endswith('"')
                 or not isinstance(previous.get('total'), int) or size > previous['total']
-                or (previous.get('size') == size and previous.get('sha256') and _file_hash(path) != previous['sha256'])):
+                or previous.get('size') != size or _file_hash(path) != previous.get('sha256')):
             raise ValueError('此片源無法安全續傳，請選「重新下載」')
         offset = size
         if offset == previous['total']:
@@ -338,10 +398,21 @@ def _download(url, path, folder, limit=None, *, resume_partial=False, progress=N
                 raise ValueError('片源已變更或不支援續傳，請選「重新下載」')
             total, expected_bytes = int(match[3]), int(match[2]) - offset + 1
         else:
-            if response.status_code != 200:
-                raise ValueError('下載回應不完整，請重試')
-            total = int(expected) if expected.isdigit() else None
-            expected_bytes = total
+            if response.status_code in (500, 502, 504):
+                raise DownloadInterrupted('來源暫時故障')
+            if response.status_code == 206:
+                match = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+)', response.headers.get('content-range', ''))
+                if (not match or int(match[1]) != 0 or int(match[2]) >= int(match[3])
+                        or (expected and (not expected.isdigit() or int(expected) != int(match[2]) + 1))):
+                    raise ValueError('來源回傳無效的下載範圍')
+                total, expected_bytes = int(match[3]), int(match[2]) + 1
+            elif response.status_code == 200:
+                if expected and not expected.isdigit():
+                    raise ValueError('來源回傳無效的下載長度')
+                total = int(expected) if expected else None
+                expected_bytes = total
+            else:
+                raise ValueError(f'來源拒絕下載（HTTP {response.status_code}）')
         if limit and total and total > limit:
             raise ValueError('影片分段過大，已停止下載')
         record = dict(url=url, etag=etag, total=total, complete=False)
@@ -363,7 +434,7 @@ def _download(url, path, folder, limit=None, *, resume_partial=False, progress=N
                 if progress and total: progress(round(size * 100 / total, 1))
         size = path.stat().st_size
         if not size or (expected_bytes is not None and size - offset != expected_bytes) or (total and size != total):
-            raise ValueError('影片下載不完整，請繼續下載')
+            raise DownloadInterrupted('影片下載不完整，正在自動續傳')
         record['complete'] = True
     finally:
         http_client.close_response(response)
@@ -372,10 +443,51 @@ def _download(url, path, folder, limit=None, *, resume_partial=False, progress=N
             _write(metadata, record)
 
 
-def _hls(url, work, folder, height, progress):
+def _hls(url, work, folder, height, progress, on_retry=None):
+    # Resume the exact saved rendition, rather than reselecting a source line.
+    plan = _read(work / 'plan.json')
+    if plan is None or not any((work / filename).exists() for _, filename in plan['resources']):
+        plan = _hls_plan(url, folder, height, on_retry)
+        _write(work / 'plan.json', plan)
+    lines, resources = plan['lines'], plan['resources']
+    filenames = {filename for _, filename in resources}
+    if (not resources or len(filenames) != len(resources)
+            or any(not re.fullmatch(r'\d{6}\.(ts|key|mp4)', name) for name in filenames)):
+        raise ValueError('無效的已保存播放清單')
+    duration = 0.0
+    for line in lines:
+        if line and not line.startswith('#') and line not in filenames:
+            raise ValueError('無效的已保存播放清單')
+        if 'URI=' in line and (not line.startswith(('#EXT-X-KEY:', '#EXT-X-MAP:'))
+                              or any(name not in filenames for name in hls_proxy._URI_ATTR.findall(line))):
+            raise ValueError('無效的已保存播放清單')
+        if line.startswith('#EXTINF:'):
+            seconds = float(line.split(':', 1)[1].split(',')[0])
+            if not 0 < seconds <= 600: raise ValueError('無效的分段長度')
+            duration += seconds
+    if not duration or '#EXT-X-ENDLIST' not in lines:
+        raise ValueError('無效的已保存播放清單')
+    for remote, _ in resources:
+        assert_hls_url(remote)
+    completed = {filename for remote, filename in resources if _completed(work / filename, remote)}
+    progress(round(len(completed) * 100 / len(resources), 1))
+    for remote, filename in resources:
+        if filename in completed: continue
+        def segment_progress(value):
+            progress(round((len(completed) + min(value, 100) / 100) * 100 / len(resources), 1))
+        _download(remote, work / filename, folder, 256 * 1024 * 1024,
+                  progress=segment_progress, on_retry=on_retry)
+        completed.add(filename)
+        progress(round(len(completed) * 100 / len(resources), 1))
+    playlist = work / 'index.m3u8'
+    playlist.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    return playlist, duration
+
+
+def _hls_plan(url, folder, height, on_retry):
     for _ in range(4):
         _check(folder)
-        text, base = hls_proxy._read_playlist(url, time.monotonic() + 25)
+        text, base = _retry(lambda: hls_proxy._read_playlist(url, time.monotonic() + 25), folder, on_retry)
         hls_proxy.rewrite_playlist(text, base)
         if re.search(r'#EXT-X-MEDIA:[^\n]*TYPE=AUDIO[^\n]*URI=', text):
             raise ValueError('此片源使用分離音軌，暫不支援整集下載')
@@ -422,16 +534,7 @@ def _hls(url, work, folder, height, progress):
     if not resources or not duration:
         raise ValueError('沒有可下載的影片分段')
     plan = dict(lines=lines, resources=[[remote, filename] for remote, filename in resources.items()])
-    previous = _read(work / 'plan.json')
-    if previous and previous != plan:
-        raise ValueError('播放清單已變更，無法安全續傳，請選「重新下載」')
-    _write(work / 'plan.json', plan)
-    for index, (remote, filename) in enumerate(resources.items()):
-        _download(remote, work / filename, folder, 256 * 1024 * 1024)
-        progress(round((index + 1) * 100 / len(resources), 1))
-    playlist = work / 'index.m3u8'
-    playlist.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    return playlist, duration
+    return plan
 
 
 def _convert(input_path, output, folder, height, expected_duration):
@@ -478,7 +581,21 @@ def _run(item):
     try:
         _check(folder)
         save(phase='downloading', progress=item.get('progress', 0))
-        detail = fetch_detail(item['source'], item['video_id'], item['episode'] or None)
+        work.mkdir(exist_ok=True)
+        if work.resolve().parent != folder.resolve() or work.is_symlink():
+            raise ValueError('無效的下載資料夾')
+        def retrying(attempt, delay, error):
+            save(phase='retrying', retry_attempt=attempt, retry_at=time.time() + delay,
+                 error='連線逾時或下載不完整，正在自動續傳')
+        def progress(value):
+            save(phase='downloading', progress=value, error='', retry_at=0)
+        saved = _read(work / 'source.json')
+        if saved:
+            detail = VideoDetail.model_validate(saved['detail'])
+            if detail.source != item['source'] or detail.id != item['video_id']:
+                raise ValueError('已保存的下載來源不符')
+        else:
+            detail = _retry(lambda: fetch_detail(item['source'], item['video_id'], item['episode'] or None), folder, retrying)
         selected = next((e for e in detail.episodes if e.id == item['episode']), None)
         if detail.episodes and not selected:
             raise ValueError('請指定要下載的集數')
@@ -487,15 +604,20 @@ def _run(item):
         urls = parse_qs(parsed.query).get('u', [])
         if parsed.scheme or parsed.netloc or parsed.path != '/api/hls' or len(urls) != 1:
             raise ValueError('此集無可下載的線上片源')
-        url = assert_hls_url(urls[0])
-        work.mkdir(exist_ok=True)
-        if work.resolve().parent != folder.resolve() or work.is_symlink():
-            raise ValueError('無效的下載資料夾')
+        try:
+            url = assert_hls_url(urls[0])
+        except UnsafeURL:
+            if not saved: raise
+            # Refresh authorization through the source parser; do not grant a
+            # new CDN merely because its hostname exists in a local file.
+            _retry(lambda: fetch_detail(item['source'], item['video_id'], item['episode'] or None), folder, retrying)
+            url = assert_hls_url(urls[0])
+        if not saved: _write(work / 'source.json', {'detail': detail.model_dump()})
         if urlparse(url).path.lower().endswith('.mp4'):
             input_path, duration = work / 'source.mp4', 0
-            _download(url, input_path, folder, resume_partial=True, progress=lambda value: save(progress=value))
+            _download(url, input_path, folder, resume_partial=True, progress=progress, on_retry=retrying)
         else:
-            input_path, duration = _hls(url, work, folder, item['height'], lambda value: save(progress=value))
+            input_path, duration = _hls(url, work, folder, item['height'], progress, on_retry=retrying)
         save(phase='preparing', progress=100)
         temporary = folder / 'video.part.mp4'
         _convert(input_path, temporary, folder, item['height'], duration)
@@ -508,7 +630,7 @@ def _run(item):
     except Exception as exc:
         save(phase='error', error=str(exc) or '下載失敗，請重試')
     finally:
-        # Interrupted downloads keep validated source parts for manual resume.
+        # Interrupted downloads retain their exact rendition and verified parts.
         if item.get('phase') == 'complete' and work.exists() and work.resolve().parent == folder.resolve() and not work.is_symlink():
             shutil.rmtree(work)
         (folder / 'video.part.mp4').unlink(missing_ok=True)

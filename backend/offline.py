@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
-from . import hls_proxy, http_client, sites, next_buffer
+from . import hls_proxy, http_client, sites, next_buffer, catalog
 from .models import VideoDetail
 from .security import UnsafeURL, SiteBusy, assert_hls_url, hls_allowed_hosts
 
@@ -131,8 +131,8 @@ def status(key):
         handle = _claim(folder)
         if handle:
             _release(handle)
-            return {**item, 'phase': 'cancelled' if (folder / 'cancel').exists() else 'error',
-                    'error': '已取消下載；已下載部分保留' if (folder / 'cancel').exists() else '下載已中斷，請手動繼續下載'}
+            return {**item, 'phase': 'cancelled' if (folder / 'cancel').exists() else 'retrying',
+                    'error': _cancel_message(folder) if (folder / 'cancel').exists() else '已保留進度，等待自動續傳'}
         if (folder / 'cancel').exists():
             return {**item, 'phase': 'cancelling', 'error': '正在取消下載，等待目前連線結束；已下載部分保留'}
     if record:
@@ -209,11 +209,10 @@ def fetch_detail(source, video_id, episode=None):
 
 
 def enqueue(source, video_id, episode='', height=720, restart=False):
-    global _started
     _start_maintenance()
     key = identity(source, video_id, episode)
     existing = status(key)
-    if existing and existing['phase'] not in ('error', 'cancelled'):
+    if existing and existing['phase'] not in ('error', 'cancelled') and not (restart and existing['phase'] == 'retrying'):
         return existing
     folder = _folder(key)
     handle = _claim(folder)
@@ -241,11 +240,16 @@ def enqueue(source, video_id, episode='', height=720, restart=False):
     except Exception:
         _release(handle)
         raise ValueError('無法加入下載佇列，請確認離線資料夾可寫入')
+    _start_worker()
+    return item
+
+
+def _start_worker():
+    global _started
     with _worker_lock:
         if not _started:
             _started = True
             threading.Thread(target=_worker, name='offline-download', daemon=True).start()
-    return item
 
 
 def _remove_queued(key):
@@ -272,7 +276,7 @@ def _cancel_message(folder):
 
 def cancel(key, reason=''):
     item = status(key)
-    if not item or item['phase'] not in ('queued', 'downloading', 'retrying', 'preparing', 'cancelling', 'deleting'):
+    if not item or item['phase'] not in ('queued', 'downloading', 'retrying', 'preparing', 'cancelling', 'deleting', 'error'):
         return
     folder = _folder(key)
     (folder / 'cancel').write_text(reason, encoding='utf-8')
@@ -403,6 +407,50 @@ def _maintenance_once():
                         _finish_delete(folder.name)
                     except (OSError, ValueError):
                         pass  # Persistent, visible error; explicit retry required.
+    _resume_pending()
+
+
+def _resume_pending():
+    # Persisted intent survives browser closure and process restarts. The file
+    # lock is shared by both apps; never clear cancel/delete markers here.
+    pending = []
+    if not ROOT.exists():
+        return
+    for folder in ROOT.iterdir():
+        if re.fullmatch(r'[0-9a-f]{64}', folder.name):
+            try:
+                item = _read(_folder(folder.name) / 'status.json')
+                if item and item.get('id') == folder.name:
+                    pending.append(item)
+            except (OSError, ValueError):
+                continue
+    for candidate in sorted(pending, key=lambda item: item.get('created', 0)):
+        folder = _folder(candidate['id'])
+        def eligible(item):
+            return (item and item.get('source') in catalog.SOURCES
+                    and item.get('id') == identity(item['source'], item.get('video_id'), item.get('episode'))
+                    and item.get('phase') in ('queued', 'downloading', 'retrying', 'preparing')
+                    and item.get('retry_at', 0) <= time.time()
+                    and not any((folder / name).exists() for name in ('cancel', 'delete.json', 'complete.json')))
+        if not eligible(candidate):
+            continue
+        handle = _claim(folder)
+        if handle is None:
+            continue
+        queued = False
+        try:
+            # Re-read after claiming: another app or the user may have stopped it.
+            item = _read(folder / 'status.json')
+            if not eligible(item):
+                continue
+            item.update(phase='queued', error='', retry_at=0)
+            _write(folder / 'status.json', item)
+            _queue.put_nowait((item, handle))
+            queued = True
+            _start_worker()
+        finally:
+            if not queued:
+                _release(handle)
 
 
 def _start_maintenance():
@@ -444,6 +492,12 @@ class DownloadInterrupted(ValueError):
     pass
 
 
+class RetryLater(ValueError):
+    def __init__(self, message, delay=300):
+        super().__init__(message)
+        self.delay = delay
+
+
 def _transient(error):
     if isinstance(error, (DownloadInterrupted, TimeoutError, ConnectionError)):
         return True
@@ -471,13 +525,15 @@ def _retry(operation, folder, on_retry=None, position=None):
         try:
             return operation()
         except Exception as error:
+            if isinstance(error, SiteBusy) and error.status_code in (429, 503):
+                raise RetryLater(str(error), max(300, error.retry_after or 0)) from error
             if not _transient(error):
                 raise
             current = position() if position else 0
             failures = 0 if current > best else failures + 1
             best = max(best, current)
             if failures > 8:
-                raise ValueError('自動續傳多次仍無進展；已下載部分保留，可稍後繼續下載') from error
+                raise RetryLater('連線尚未恢復；已保留進度，稍後自動續傳') from error
             attempts += 1
             delay = min(30, 2 ** max(1, failures))
             if on_retry: on_retry(attempts, delay, error)
@@ -513,6 +569,22 @@ def _download_once(url, path, folder, limit=None, *, resume_partial=False, progr
     resumable = (previous.get('url') == url and isinstance(validator, str)
                  and validator.startswith('"') and validator.endswith('"')
                  and isinstance(previous.get('total'), int))
+    if resumable and not previous.get('complete') and 0 <= previous.get('size', -1) < size:
+        # A crash can leave bytes beyond the last durable checkpoint. Verify
+        # that prefix before discarding only its uncommitted tail.
+        committed = previous['size']
+        digest = hashlib.sha256()
+        with path.open('rb') as saved:
+            remaining = committed
+            while remaining:
+                chunk = saved.read(min(1024 * 1024, remaining))
+                if not chunk: break
+                digest.update(chunk)
+                remaining -= len(chunk)
+        if not remaining and digest.hexdigest() == previous.get('sha256'):
+            with path.open('r+b') as saved:
+                saved.truncate(committed)
+            size = committed
     if size and (resume_partial or resumable):
         # If-Range requires a strong validator. Never append an unknown/new file.
         if (previous.get('url') != url or not isinstance(validator, str) or not validator.startswith('"') or not validator.endswith('"')
@@ -569,8 +641,13 @@ def _download_once(url, path, folder, limit=None, *, resume_partial=False, progr
                 raise ValueError(f'來源拒絕下載（HTTP {response.status_code}）')
         if limit and total and total > limit:
             raise ValueError('影片分段過大，已停止下載')
-        record = dict(url=url, etag=etag, total=total, complete=False)
-        size = offset
+        digest = hashlib.sha256()
+        if offset:
+            with path.open('rb') as saved:
+                for chunk in iter(lambda: saved.read(1024 * 1024), b''):
+                    digest.update(chunk)
+        record = dict(url=url, etag=etag, total=total, complete=False, size=offset, sha256=digest.hexdigest())
+        size = checkpoint = offset
         with path.open('ab' if offset else 'wb') as out:
             _write(metadata, record)
             if progress and total: progress(round(offset * 100 / total, 1))
@@ -584,7 +661,12 @@ def _download_once(url, path, folder, limit=None, *, resume_partial=False, progr
                 if total and out.tell() + len(chunk) > total:
                     raise ValueError('影片下載長度與來源不符')
                 out.write(chunk)
+                digest.update(chunk)
                 size = out.tell()
+                if size - checkpoint >= 4 * 1024 * 1024:
+                    out.flush()
+                    _write(metadata, {**record, 'size': size, 'sha256': digest.hexdigest()})
+                    checkpoint = size
                 if progress and total: progress(round(size * 100 / total, 1))
         size = path.stat().st_size
         if not size or (expected_bytes is not None and size - offset != expected_bytes) or (total and size != total):
@@ -781,6 +863,9 @@ def _run(item):
         save(phase='complete', error='')
     except Cancelled:
         save(phase='cancelled', error=_cancel_message(folder))
+    except RetryLater as exc:
+        save(phase='retrying', retry_at=time.time() + exc.delay,
+             retry_attempt=item.get('retry_attempt', 0) + 1, error=str(exc))
     except Exception as exc:
         save(phase='error', error=str(exc) or '下載失敗，請重試')
     finally:

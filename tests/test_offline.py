@@ -63,7 +63,7 @@ class OfflineTests(unittest.TestCase):
         item, handle = offline._queue.get()
         self.assertEqual(offline.status(item['id'])['phase'], 'queued')
         offline._release(handle)
-        self.assertEqual(offline.status(item['id'])['phase'], 'error')
+        self.assertEqual(offline.status(item['id'])['phase'], 'retrying')
 
     def test_multi_episode_selection_can_queue_more_than_twenty_without_origin_requests(self):
         try:
@@ -341,15 +341,15 @@ class OfflineTests(unittest.TestCase):
         self.assertTrue(all(call.args[0] >= 50 for call in progress.call_args_list))
         self.assertEqual(retry.call_count, 1)
 
-    def test_automatic_retry_stops_refusal_and_bounds_failures_but_allows_advancing_downloads(self):
-        for error in (security.SiteBusy('source', 403), security.SiteBusy('source', 429, 30), security.UnsafeURL('private')):
+    def test_automatic_retry_stops_refusal_and_defers_outages_but_allows_advancing_downloads(self):
+        for error in (security.SiteBusy('source', 403), security.UnsafeURL('private')):
             operation, wait = Mock(side_effect=error), Mock()
             with patch.object(offline, '_wait_retry', wait), self.assertRaises(type(error)):
                 offline._retry(operation, offline.ROOT)
             self.assertEqual(operation.call_count, 1)
             wait.assert_not_called()
         for error in (TimeoutError('timeout'), offline.http_client.requests.RequestsError('curl timeout', code=28)):
-            with patch.object(offline, '_wait_retry') as wait, self.assertRaisesRegex(ValueError, '仍無進展'):
+            with patch.object(offline, '_wait_retry') as wait, self.assertRaises(offline.RetryLater):
                 offline._retry(Mock(side_effect=error), offline.ROOT)
             self.assertEqual(wait.call_count, 8)
             self.assertEqual([call.args[1] for call in wait.call_args_list], [2, 4, 8, 16, 30, 30, 30, 30])

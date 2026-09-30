@@ -49,6 +49,7 @@ function saveVol(n: number) {
 export function Player({
   src,
   startAt = 0,
+  startPaused = false,
   onProgress,
   onEnded,
   onError,
@@ -60,9 +61,10 @@ export function Player({
 }: {
   src: string;
   startAt?: number;
+  startPaused?: boolean;
   onProgress?: (pos: number, dur: number) => void;
   onEnded?: () => void;
-  onError?: (position: number) => void;
+  onError?: (position: number, paused: boolean) => void;
   remote?: CastingController;
   returnPosition?: number;
   favorited?: boolean;
@@ -146,7 +148,7 @@ export function Player({
     failureReported.current = true;
     setLoading(false);
     setPlayError("播放來源無法載入");
-    onErrorRef.current?.(playbackPosition.current);
+    onErrorRef.current?.(playbackPosition.current, videoRef.current?.paused ?? true);
   }
 
   useEffect(() => {
@@ -215,7 +217,7 @@ export function Player({
     const start = resume?.position ?? Math.max(0, startAt);
     playbackPosition.current = start;
     const beginPlayback = () => {
-      if (resume?.paused) { setLoading(false); return; }
+      if (resume?.paused ?? startPaused) { setLoading(false); return; }
       if (!castingRef.current) void video.play().catch(() => { setLoading(false); setPlayError("瀏覽器暫停了自動播放，請按播放繼續。"); });
     };
     video.volume = vol;
@@ -295,7 +297,7 @@ export function Player({
     };
     // vol/muted applied once when attaching; later changes go through applyVol
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src, startAt, playbackSrc]);
+  }, [src, startAt, startPaused, playbackSrc]);
 
   useEffect(() => {
     const v = videoRef.current;

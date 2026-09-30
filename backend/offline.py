@@ -122,7 +122,10 @@ def status(key):
         handle = _claim(folder)
         if handle:
             _release(handle)
-            return {**item, 'phase': 'error', 'error': '下載已中斷，請手動繼續下載'}
+            return {**item, 'phase': 'cancelled' if (folder / 'cancel').exists() else 'error',
+                    'error': '已取消下載；已下載部分保留' if (folder / 'cancel').exists() else '下載已中斷，請手動繼續下載'}
+        if (folder / 'cancel').exists():
+            return {**item, 'phase': 'cancelling', 'error': '正在取消下載，等待目前連線結束；已下載部分保留'}
     if record:
         return {**item, 'phase': 'error', 'error': '本地檔案遺失或不完整，請重新下載'}
     return item
@@ -233,8 +236,25 @@ def enqueue(source, video_id, episode='', height=720, restart=False):
 
 def cancel(key):
     item = status(key)
-    if item and item['phase'] in ('queued', 'downloading', 'retrying', 'preparing'):
-        (_folder(key) / 'cancel').touch()
+    if not item or item['phase'] not in ('queued', 'downloading', 'retrying', 'preparing', 'cancelling'):
+        return
+    folder = _folder(key)
+    (folder / 'cancel').touch()
+    removed = None
+    # The worker and cancellation must not take the same queued task. A running
+    # task (including one owned by the other app) observes the shared marker.
+    with _queue.mutex:
+        removed = next((entry for entry in _queue.queue if entry[0]['id'] == key), None)
+        if removed:
+            _write(folder / 'status.json', {**removed[0], 'phase': 'cancelled',
+                                          'error': '已取消下載；已下載部分保留，可繼續下載'})
+            _queue.queue.remove(removed)
+            _queue.unfinished_tasks -= 1
+            _queue.not_full.notify()
+            if _queue.unfinished_tasks == 0:
+                _queue.all_tasks_done.notify_all()
+    if removed:
+        _release(removed[1])
 
 
 def delete(keys, sources):

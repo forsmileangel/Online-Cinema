@@ -401,6 +401,45 @@ class OfflineTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError): offline.media_path(job['id'])
         finally: offline._release(handle)
 
+    def test_cancel_queued_task_removes_it_immediately_and_can_resume_again(self):
+        first = offline.enqueue('gimy', 'test', '1')
+        second = offline.enqueue('gimy', 'test', '2')
+        work = offline._folder(second['id']) / 'parts'; work.mkdir()
+        (work / 'kept.ts').write_bytes(b'kept')
+        try:
+            with patch.object(offline, 'fetch_detail') as fetch:
+                offline.cancel(second['id'])
+            fetch.assert_not_called()
+            self.assertEqual(offline.status(second['id'])['phase'], 'cancelled')
+            self.assertEqual(offline._queue.qsize(), 1)
+            self.assertEqual(offline._queue.unfinished_tasks, 1)
+            self.assertEqual((work / 'kept.ts').read_bytes(), b'kept')
+            repeated = offline.enqueue('gimy', 'test', '2')
+            self.assertEqual(repeated['phase'], 'queued')
+            self.assertEqual(offline._queue.qsize(), 2)
+            self.assertEqual(offline.status(first['id'])['phase'], 'queued')
+        finally:
+            while not offline._queue.empty():
+                _, handle = offline._queue.get_nowait()
+                offline._release(handle); offline._queue.task_done()
+        self.assertEqual(offline._queue.unfinished_tasks, 0)
+
+    def test_running_or_other_app_cancellation_is_visible_before_worker_finishes(self):
+        job = offline.enqueue('gimy', 'test', '1')
+        item, handle = offline._queue.get()
+        try:
+            offline.cancel(job['id'])
+            self.assertEqual(offline.status(job['id'])['phase'], 'cancelling')
+            self.assertEqual(offline.status(job['id'])['progress'], 0)
+            offline.cancel(job['id'])
+            self.assertEqual(offline._queue.unfinished_tasks, 1)
+            with patch.object(offline, 'fetch_detail') as fetch:
+                offline._run(item)
+            fetch.assert_not_called()
+            self.assertEqual(offline.status(job['id'])['phase'], 'cancelled')
+        finally:
+            offline._release(handle); offline._queue.task_done()
+
     def test_windows_atomic_replace_retries_brief_file_locks(self):
         original = Path.replace
         calls = []

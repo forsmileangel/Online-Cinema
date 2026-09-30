@@ -5,7 +5,7 @@ import type { Episode } from "../types";
 import "./Offline.css";
 
 type Download = { id: string; source: string; video_id: string; episode: string; title: string; episode_title: string; height: number; phase: string; progress: number; error: string; url?: string; size?: number; retry_attempt?: number; retry_at?: number };
-const active = (item: Download) => ["queued", "downloading", "retrying", "preparing"].includes(item.phase);
+const active = (item: Download) => ["queued", "downloading", "retrying", "preparing", "cancelling"].includes(item.phase);
 async function request(url: string, body?: object, method = "GET") {
   const response = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
   const result = await response.json();
@@ -34,6 +34,7 @@ function useDownloads(source?: string, id?: string) {
   return { items, error, refresh: () => setRevision(n => n + 1) };
 }
 function label(item: Download) {
+  if (item.phase === "cancelling") return `正在取消下載 · 已保留 ${item.progress}% · 等待目前連線結束`;
   if (item.phase === "retrying") return `自動續傳中 · 已保留 ${item.progress}% · 第 ${item.retry_attempt || 1} 次重試 · 約 ${Math.max(0, Math.ceil((item.retry_at || 0) - Date.now() / 1000))} 秒後重連`;
   return item.phase === "complete" ? "已下載 · 優先本地播放" : item.phase === "queued" ? "等待下載" : item.phase === "preparing" ? "正在整理 MP4，尚未完成" : item.phase === "downloading" ? `下載中 ${item.progress}%` : item.error || "下載中斷";
 }
@@ -53,7 +54,7 @@ function DownloadRow({ item, refresh }: { item: Download; refresh: () => void })
   return <div style={{ borderTop: "1px solid #333", padding: "10px 0", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
     <div>{item.title} · {item.episode_title} <span className="muted">{sources.find(s => s.id === item.source)?.label} · {item.height ? "720p" : "來源畫質"}</span></div>
     <div role="status">{label(item)}</div>
-    {item.phase === "complete" ? <Link className="btn alt" to={`${prefix}/watch/${encodeURIComponent(item.source)}/${encodeURIComponent(item.video_id)}?ep=${encodeURIComponent(item.episode)}`}>播放本地影片</Link> : <button className="btn alt" disabled={busy} onClick={() => void act()}>{active(item) ? "取消下載" : "繼續下載"}</button>}
+    {item.phase === "complete" ? <Link className="btn alt" to={`${prefix}/watch/${encodeURIComponent(item.source)}/${encodeURIComponent(item.video_id)}?ep=${encodeURIComponent(item.episode)}`}>播放本地影片</Link> : <button className="btn alt" disabled={busy || item.phase === "cancelling"} onClick={() => void act()}>{item.phase === "cancelling" || busy && active(item) ? "取消中…" : active(item) ? "取消下載" : "繼續下載"}</button>}
     {!active(item) && item.phase !== "complete" ? <button className="btn alt" disabled={busy} onClick={() => void act(true)}>重新下載</button> : null}
     {error ? <p role="alert">{error}</p> : null}
   </div>;
@@ -100,7 +101,7 @@ export function OfflinePanel({ source, id, episodes, current, local, onReady }: 
       refresh(); setBusy(false);
     }
   }
-  return <details style={{ padding: "8px 16px" }}>
+  return <details style={{ padding: "8px 16px" }} onKeyDown={e => e.stopPropagation()}>
     <summary>離線下載{local ? " · 目前使用本地影片" : ""}{items.some(active) ? " · 下載進行中" : ""}</summary>
     <p className="muted">點擊才下載整集；完成後保留在 D:\AI工作區\離線影片。下載 720p 較適合平板與 Nest Hub；中斷後保留已下載部分，可按「繼續下載」。整理期間會使用電腦運算資源。</p>
     <button className="btn" disabled={busy} onClick={open}>選擇集數下載</button>

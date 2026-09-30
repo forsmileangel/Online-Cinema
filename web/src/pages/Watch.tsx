@@ -91,7 +91,7 @@ export function Watch() {
   const [resumeEp, setResumeEp] = useState("");
   const [episodeError, setEpisodeError] = useState("");
   const [resolveAttempt, setResolveAttempt] = useState(0);
-  const [retryResume, setRetryResume] = useState<{ episode: string; position: number } | null>(null);
+  const [retryResume, setRetryResume] = useState<{ episode: string; position: number; paused: boolean } | null>(null);
   const failedRefresh = useRef("");
   const [autoplay, setAutoplay] = useState(loadAutoplay);
   const posRef = useRef(0);
@@ -316,8 +316,8 @@ export function Watch() {
     pickEpisode(ids[i + 1]);
   }, [cast.active, data, epId, id]);
 
-  function retryEpisode(position = posRef.current) {
-    setRetryResume({ episode: activeEp, position: Number.isFinite(position) ? Math.max(0, position) : 0 });
+  function retryEpisode(position = posRef.current, paused = false) {
+    setRetryResume({ episode: activeEp, position: Number.isFinite(position) ? Math.max(0, position) : 0, paused });
     setEpisodeError("");
     setData((prev) => prev ? { ...prev, episodes: prev.episodes?.map((e) => e.id === activeEp ? { ...e, playlist: "" } : e) } : prev);
     setResolveAttempt((n) => n + 1);
@@ -327,10 +327,10 @@ export function Watch() {
     }
   }
 
-  function playbackError(position: number) {
+  function playbackError(position: number, paused: boolean) {
     const token = `${source}:${id}:${activeEp}`;
     posRef.current = position;
-    if (failedRefresh.current !== token) { failedRefresh.current = token; retryEpisode(position); }
+    if (failedRefresh.current !== token) { failedRefresh.current = token; retryEpisode(position, paused); }
     else setEpisodeError("播放來源無法載入，請重試或選擇其他集數。");
   }
 
@@ -367,7 +367,7 @@ export function Watch() {
         <div className="player-wrap">
           <div className="player-screen">
             {!cast.restoring && playlist && !episodeError ? (
-              <Player key={`${activeEp}:${resolveAttempt}`} onError={playbackError} src={playlist} startAt={startAt} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} episodeControls={episodeControls} />
+              <Player key={`${activeEp}:${resolveAttempt}`} onError={playbackError} src={playlist} startAt={startAt} startPaused={retryResume?.episode === activeEp && retryResume.paused} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} episodeControls={episodeControls} />
             ) : (
               <div className="player">
                 <div className="empty">{episodeError ? "這一集無法播放" : `載入第${activeEp || ""}集…`}</div>

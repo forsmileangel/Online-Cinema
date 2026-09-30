@@ -103,7 +103,7 @@ export function OfflinePanel({ source, id, episodes, current, local, onReady }: 
     <summary>離線下載{local ? " · 目前使用本地影片" : ""}{items.some(active) ? " · 下載進行中" : ""}</summary>
     <p className="muted">點擊才下載整集；完成後保留在 D:\AI工作區\離線影片。下載 720p 較適合平板與 Nest Hub；中斷後保留已下載部分，可按「繼續下載」。整理期間會使用電腦運算資源。</p>
     <button className="btn" disabled={busy} onClick={open}>選擇集數下載</button>
-    <dialog ref={dialog} className="offline-download-dialog" aria-label="選擇離線下載集數" onCancel={e => { if (busy) e.preventDefault(); }}>
+    <dialog ref={dialog} className="offline-download-dialog" aria-label="選擇離線下載集數" onKeyDown={e => e.stopPropagation()} onCancel={e => { if (busy) e.preventDefault(); }}>
       <div className="offline-download-header"><h2>選擇離線下載集數</h2><button className="btn alt" disabled={busy} onClick={() => dialog.current?.close()}>關閉</button></div>
       <p className="muted">勾選想下載的集數，可一次加入多集；不會切換目前播放的影片。</p>
       <div className="offline-download-actions">

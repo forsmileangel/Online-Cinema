@@ -800,8 +800,15 @@ def _hls(url, work, folder, height, progress, on_retry=None):
     if not duration or '#EXT-X-ENDLIST' not in lines:
         raise ValueError('無效的已保存播放清單')
     completed = {filename for remote, filename in resources if _completed(work / filename, remote)}
-    for remote, filename in resources:
-        if filename not in completed:
+    pending = [remote for remote, filename in resources if filename not in completed]
+    try:
+        for remote in pending:
+            assert_hls_url(remote)
+    except UnsafeURL:
+        # Re-establish child-CDN authorization only via a validated live parent.
+        # Keep the original plan/rendition and all verified downloaded segments.
+        _hls_plan(url, folder, height, on_retry)
+        for remote in pending:
             assert_hls_url(remote)
     progress(round(len(completed) * 100 / len(resources), 1))
     for remote, filename in resources:

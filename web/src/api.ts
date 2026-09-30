@@ -54,7 +54,10 @@ async function req<T>(path: string, init?: RequestInit, timeoutMs?: number): Pro
       } catch {
         /* ignore */
       }
-      throw new Error(msg);
+      const retryAfter = res.headers.get("Retry-After");
+      const seconds = retryAfter == null ? 0 : /^\d+$/.test(retryAfter)
+        ? Number(retryAfter) : Math.max(0, Math.ceil((Date.parse(retryAfter) - Date.now()) / 1000));
+      throw Object.assign(new Error(msg), { status: res.status, retryAfterSeconds: Number.isFinite(seconds) ? seconds : 0 });
     }
     return await res.json() as T;
   } catch (e) {

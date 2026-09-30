@@ -7,6 +7,7 @@ import { Player } from "../components/Player";
 import { PosterRow } from "../components/PosterRow";
 import { api } from "../api";
 import { useCasting } from "../hooks/useCasting";
+import { usePlaybackRecovery } from "../hooks/usePlaybackRecovery";
 import { useSource } from "../source";
 import type { Episode, VideoDetail } from "../types";
 
@@ -93,7 +94,7 @@ export function Watch() {
   const [offlineError, setOfflineError] = useState("");
   const [resolveAttempt, setResolveAttempt] = useState(0);
   const [retryResume, setRetryResume] = useState<{ episode: string; position: number; paused: boolean } | null>(null);
-  const failedRefresh = useRef("");
+  const recoveryProgress = useRef<(position: number) => void>(() => {});
   const [autoplay, setAutoplay] = useState(loadAutoplay);
   const posRef = useRef(0);
   const lastSent = useRef(0);
@@ -107,7 +108,6 @@ export function Watch() {
     setErr("");
     setEpisodeError("");
     setRetryResume(null);
-    failedRefresh.current = "";
     setZhTitle("");
     setZhDesc("");
     setZhNames([]);
@@ -202,6 +202,7 @@ export function Watch() {
   const onProgress = useCallback(
     (pos: number, dur: number) => {
       posRef.current = pos;
+      recoveryProgress.current(pos);
       if (dur > 1 && pos < dur - 1) endLock.current = "";
       if (!data || dur < 1) return;
       const now = Date.now();
@@ -262,6 +263,21 @@ export function Watch() {
     onReturn: setReturnPosition,
   });
 
+  const recovery = usePlaybackRecovery(`${source}:${id}:${activeEp}`, !cast.active && !cast.restoring,
+    async ({ position, paused }, signal) => {
+      const next = await api.video(id, source, signal, activeEp || undefined);
+      if (signal.aborted) return;
+      if (episodes.length && !(next.episodes || []).some(e => e.id === activeEp && e.playlist)) {
+        throw Object.assign(new Error("這一集尚無可播放的來源"), { status: 404 });
+      }
+      if (!episodes.length && !next.playlist) throw Object.assign(new Error("目前沒有可播放的來源"), { status: 404 });
+      setRetryResume({ episode: activeEp, position, paused });
+      setData(prev => prev ? mergeEpisodes(prev, next) : next);
+      setEpisodeError("");
+      setResolveAttempt(n => n + 1);
+    });
+  recoveryProgress.current = recovery.progress;
+
   useEffect(() => {
     const root = epRailRef.current;
     const on = root?.querySelector<HTMLElement>(".chip.on");
@@ -289,10 +305,10 @@ export function Watch() {
   function pickEpisode(nextId: string) {
     if (nextId === epId) return;
     if (cast.active) { void cast.episode(nextId); return; }
+    recovery.stop();
     setEpisodeError("");
     setRetryResume(null);
     endLock.current = "";
-    failedRefresh.current = "";
     setEpId(nextId);
     setEpTouched(true);
     setReturnPosition(0);
@@ -318,21 +334,14 @@ export function Watch() {
   }, [cast.active, data, epId, id]);
 
   function retryEpisode(position = posRef.current, paused = false) {
-    setRetryResume({ episode: activeEp, position: Number.isFinite(position) ? Math.max(0, position) : 0, paused });
-    setEpisodeError("");
-    setData((prev) => prev ? { ...prev, episodes: prev.episodes?.map((e) => e.id === activeEp ? { ...e, playlist: "" } : e) } : prev);
-    setResolveAttempt((n) => n + 1);
-    if (!episodes.length) {
-      setData((prev) => prev ? { ...prev, playlist: "" } : prev);
-      void api.video(id, source).then((next) => { setData(next); setEpisodeError(""); }).catch((e) => setEpisodeError(e.message));
-    }
+    setEpisodeError("正在重新連接這一集…");
+    recovery.retryNow(position, paused);
   }
 
   function playbackError(position: number, paused: boolean) {
-    const token = `${source}:${id}:${activeEp}`;
     posRef.current = position;
-    if (failedRefresh.current !== token) { failedRefresh.current = token; retryEpisode(position, paused); }
-    else setEpisodeError("播放來源無法載入，請重試或選擇其他集數。");
+    setEpisodeError("播放來源暫時中斷，已保留播放進度。");
+    recovery.start(position, paused);
   }
 
   async function toggleFav() {
@@ -379,7 +388,9 @@ export function Watch() {
                 <FavUnderFs on={!!data.favorited} onClick={() => void toggleFav()} />
               </div>
             )}
-            {episodeError ? <p className="banner err" role="alert">{episodeError} <button className="btn" onClick={() => retryEpisode()}>重試這一集</button></p> : null}
+            {episodeError ? <p className="banner err" role="alert">{recovery.message || episodeError} {recovery.pending
+              ? <button className="btn" onClick={() => recovery.stop()}>停止自動重試</button>
+              : <button className="btn" onClick={() => retryEpisode()}>重試這一集</button>}</p> : null}
           </div>
           <CastBar controller={cast} currentEpisode={currentEp?.title} currentTitle={title} />
           <OfflinePanel key={`${source}:${id}`} source={source} id={id} episodes={episodes} current={activeEp}

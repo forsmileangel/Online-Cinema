@@ -127,6 +127,8 @@ export function Player({
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
   const playbackPosition = useRef(startAt);
+  const playbackIntent = useRef(!startPaused);
+  const expectedDuration = useRef(0);
   const failureReported = useRef(false);
   const [loading, setLoading] = useState(true);
   const [show, setShow] = useState(true);
@@ -150,7 +152,9 @@ export function Player({
     failureReported.current = true;
     setLoading(false);
     setPlayError("播放來源無法載入");
-    onErrorRef.current?.(playbackPosition.current, videoRef.current?.paused ?? true);
+    const video = videoRef.current;
+    const pausedByUser = !playbackIntent.current || !!(video?.paused && !video.error && !video.ended);
+    onErrorRef.current?.(playbackPosition.current, pausedByUser);
   }
 
   useEffect(() => {
@@ -218,6 +222,8 @@ export function Player({
     qualityResume.current = null;
     const start = resume?.position ?? Math.max(0, startAt);
     playbackPosition.current = start;
+    playbackIntent.current = !(resume?.paused ?? startPaused);
+    expectedDuration.current = 0;
     const beginPlayback = () => {
       if (resume?.paused ?? startPaused) { setLoading(false); return; }
       if (!castingRef.current) void video.play().catch(() => { setLoading(false); setPlayError("瀏覽器暫停了自動播放，請按播放繼續。"); });
@@ -328,11 +334,20 @@ export function Player({
       setPaused(video.paused);
       setLoading(video.readyState < 3 && !video.paused);
       if (!castingRef.current) {
-        if (Number.isFinite(video.duration) && video.duration > 0) playbackPosition.current = video.currentTime;
-        onProgress?.(video.currentTime, video.duration || 0);
-        if (!video.paused && video.duration > 1 && video.currentTime >= video.duration - 0.2) onEnded?.();
+        if (!video.error && !failureReported.current && Number.isFinite(video.duration) && video.duration > 0) {
+          expectedDuration.current = Math.max(expectedDuration.current, video.duration);
+          playbackPosition.current = video.currentTime;
+          onProgress?.(video.currentTime, video.duration);
+        }
       }
     };
+    const onPlay = () => { playbackIntent.current = true; };
+    const onPause = () => {
+      // Native media errors/ended can set paused without a user pause command.
+      if (!video.error && !video.ended && !failureReported.current) playbackIntent.current = false;
+    };
+    video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPause);
     video.addEventListener("timeupdate", onTime);
     video.addEventListener("progress", onTime);
     video.addEventListener("play", onTime);
@@ -347,10 +362,15 @@ export function Player({
     video.addEventListener("playing", onPlaying);
     video.addEventListener("volumechange", onVolume);
     const onEnd = () => {
-      if (!castingRef.current) onEnded?.();
+      if (castingRef.current || failureReported.current) return;
+      const expected = Math.max(expectedDuration.current, Number.isFinite(video.duration) ? video.duration : 0);
+      if (expected <= 0 || video.currentTime < expected - 2) playbackFailed();
+      else onEnded?.();
     };
     video.addEventListener("ended", onEnd);
     return () => {
+      video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPause);
       video.removeEventListener("timeupdate", onTime);
       video.removeEventListener("progress", onTime);
       video.removeEventListener("play", onTime);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { OfflinePanel } from "../components/Offline";
+import { OfflinePanel, notifyOfflinePlayback } from "../components/Offline";
 import { NextEpisodeBuffer } from "../components/NextEpisodeBuffer";
 import { CastBar } from "../components/CastBar";
 import { Player } from "../components/Player";
@@ -90,6 +90,7 @@ export function Watch() {
   const [epTouched, setEpTouched] = useState(false);
   const [resumeEp, setResumeEp] = useState("");
   const [episodeError, setEpisodeError] = useState("");
+  const [offlineError, setOfflineError] = useState("");
   const [resolveAttempt, setResolveAttempt] = useState(0);
   const [retryResume, setRetryResume] = useState<{ episode: string; position: number; paused: boolean } | null>(null);
   const failedRefresh = useRef("");
@@ -363,11 +364,15 @@ export function Watch() {
 
   return (
     <div className="watch">
+      {offlineError ? <p role="alert">{offlineError}</p> : null}
       <div className={`watch-stage${manyEps ? " has-eps" : ""}`}>
         <div className="player-wrap">
           <div className="player-screen">
             {!cast.restoring && playlist && !episodeError ? (
-              <Player key={`${activeEp}:${resolveAttempt}`} onError={playbackError} src={playlist} startAt={startAt} startPaused={retryResume?.episode === activeEp && retryResume.paused} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} episodeControls={episodeControls} />
+              <Player key={`${activeEp}:${resolveAttempt}`} onPlaybackStarted={() => {
+                setOfflineError("");
+                void notifyOfflinePlayback(source, id, activeEp).catch(e => setOfflineError(`停止此集下載失敗：${e.message}`));
+              }} onError={playbackError} src={playlist} startAt={startAt} startPaused={retryResume?.episode === activeEp && retryResume.paused} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} episodeControls={episodeControls} />
             ) : (
               <div className="player">
                 <div className="empty">{episodeError ? "這一集無法播放" : `載入第${activeEp || ""}集…`}</div>

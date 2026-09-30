@@ -51,6 +51,7 @@ export function Player({
   startAt = 0,
   startPaused = false,
   onProgress,
+  onPlaybackStarted,
   onEnded,
   onError,
   remote,
@@ -63,6 +64,7 @@ export function Player({
   startAt?: number;
   startPaused?: boolean;
   onProgress?: (pos: number, dur: number) => void;
+  onPlaybackStarted?: () => void;
   onEnded?: () => void;
   onError?: (position: number, paused: boolean) => void;
   remote?: CastingController;
@@ -574,7 +576,7 @@ export function Player({
       onDoubleClick={onSurfaceDblClick}
       onWheel={onWheel}
     >
-      <video ref={videoRef} playsInline onResize={(e) => setVideoHeight(e.currentTarget.videoHeight)} onLoadedMetadata={(e) => setVideoHeight(e.currentTarget.videoHeight)} onPlay={() => setPlayError("")} onError={playbackFailed} />
+      <video ref={videoRef} playsInline onResize={(e) => setVideoHeight(e.currentTarget.videoHeight)} onLoadedMetadata={(e) => setVideoHeight(e.currentTarget.videoHeight)} onPlay={() => { setPlayError(""); if (!castingRef.current) onPlaybackStarted?.(); }} onError={playbackFailed} />
       {!casting && (qualityBusy || qualityError) ? <div className="loading-pill" role="status">{qualityBusy ? "正在準備 720p…" : qualityError}</div> : null}
       {playError && !casting && !qualityBusy && !qualityError ? <div className="loading-pill" role="status">{playError}</div> : null}
       {isPaused ? (

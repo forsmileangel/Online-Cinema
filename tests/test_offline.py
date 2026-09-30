@@ -19,7 +19,7 @@ class OfflineTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         for obj, name, value in [(offline, 'ROOT', Path(tmp.name)), (offline, '_queue', queue.Queue(offline._queue.maxsize)),
-                                 (offline, '_started', True), (security, '_extra_media_hosts', {}),
+                                 (offline, '_started', True), (offline, '_maintenance_started', True), (offline, '_playback_parts', {}), (security, '_extra_media_hosts', {}),
                                  (security, '_extra_media_sources', {})]:
             p = patch.object(obj, name, value); p.start(); self.addCleanup(p.stop)
         p = patch.object(security, '_assert_not_private'); p.start(); self.addCleanup(p.stop)
@@ -451,6 +451,118 @@ class OfflineTests(unittest.TestCase):
             offline._write(offline.ROOT / 'status.json', {'ready': True})
         self.assertEqual(len(calls), 3)
         self.assertEqual(offline._read(offline.ROOT / 'status.json'), {'ready': True})
+
+    def test_delete_locked_parts_preserves_status_and_retries(self):
+        job = offline.enqueue('gimy', 'test', '45')
+        offline.cancel(job['id'])
+        folder = offline._folder(job['id'])
+        work = folder / 'parts'; work.mkdir()
+        (work / '000000.ts').write_bytes(b'kept until deletion succeeds')
+        with patch.object(offline.shutil, 'rmtree', side_effect=PermissionError('in use')):
+            result = offline.delete([job['id']], {'gimy'})
+        self.assertEqual(len(result['errors']), 1)
+        self.assertTrue((folder / 'status.json').exists(), 'must not orphan failed deletions')
+        self.assertEqual(offline.status(job['id'])['phase'], 'delete_error')
+        with patch.object(offline, '_finish_delete') as finish:
+            offline._maintenance_once()
+        finish.assert_not_called()  # No endless retries of a locked file.
+        self.assertEqual(offline.delete([job['id']], {'gimy'})['deleted'], [job['id']])
+        self.assertFalse(work.exists())
+        self.assertIsNone(offline.status(job['id']))
+        self.assertEqual(offline.delete([job['id']], {'gimy'})['deleted'], [job['id']])
+
+    def test_delete_automatically_cancels_local_and_other_app_queued_jobs(self):
+        first = offline.enqueue('gimy', 'test', '1')
+        second = offline.enqueue('gimy', 'test', '2')
+        try:
+            with patch.object(offline, '_queue', queue.Queue()):
+                result = offline.delete([second['id']], {'gimy'})
+            self.assertEqual(result['pending'], [second['id']])
+            self.assertEqual(offline.status(second['id'])['phase'], 'deleting')
+            self.assertEqual(offline.enqueue('gimy', 'test', '2')['phase'], 'deleting')
+            offline._maintenance_once()  # Owner releases its queued lock, even if its worker is busy.
+            self.assertIsNone(offline.status(second['id']))
+            self.assertEqual(offline.status(first['id'])['phase'], 'queued')
+            result = offline.delete([first['id']], {'gimy'})
+            self.assertEqual(result['deleted'], [first['id']])
+            self.assertEqual(offline._queue.unfinished_tasks, 0)
+        finally:
+            while not offline._queue.empty():
+                _, handle = offline._queue.get(); offline._release(handle)
+
+    def test_running_delete_finishes_after_worker_exits_and_survives_missing_status(self):
+        item = offline.enqueue('gimy', 'test', '1')
+        _, handle = offline._queue.get()
+        try:
+            self.assertEqual(offline.delete([item['id']], {'gimy'})['pending'], [item['id']])
+            self.assertEqual(offline.status(item['id'])['phase'], 'deleting')
+            with patch.object(offline, 'fetch_detail') as fetch:
+                offline._run(item)
+            fetch.assert_not_called()
+        finally:
+            offline._release(handle); offline._queue.task_done()
+        # The journal survives a restart or interruption during metadata cleanup.
+        (offline._folder(item['id']) / 'status.json').unlink()
+        offline._maintenance_once()
+        self.assertIsNone(offline.status(item['id']))
+
+    def test_playback_cancels_only_matching_job_and_resolution_does_not_cancel(self):
+        first, second = [offline.enqueue('gimy', 'test', str(i)) for i in (1, 2)]
+        try:
+            with patch.object(offline.sites, 'get', return_value=Mock(fetch_video=lambda video_id: self.detail)):
+                offline.fetch_detail('gimy', 'test', '1')
+            self.assertEqual(offline.status(first['id'])['phase'], 'queued')
+            main.offline_playback(main.OfflineIn(source='gimy', video_id='test', episode='1'))
+            self.assertEqual(offline.status(first['id'])['phase'], 'cancelled')
+            self.assertIn('已開始播放此集', offline.status(first['id'])['error'])
+            self.assertEqual(offline.status(second['id'])['phase'], 'queued')
+            offline.playback('hongguo', 'test', '2')
+            self.assertEqual(offline.status(second['id'])['phase'], 'queued')
+        finally:
+            while not offline._queue.empty():
+                _, handle = offline._queue.get(); offline._release(handle)
+
+    def test_partial_playback_reuses_only_verified_matching_hls_bytes_with_range(self):
+        job = offline.enqueue('gimy', 'test', '1')
+        folder = offline._folder(job['id']); work = folder / 'parts'; work.mkdir()
+        segment_url = URL.replace('index.m3u8', 'a.ts')
+        path = work / '000000.ts'; path.write_bytes(b'0123456789')
+        metadata = {'url': segment_url, 'complete': True, 'size': 10, 'sha256': offline._file_hash(path)}
+        offline._write(path.with_name(path.name + '.download.json'), metadata)
+        offline._write(work / 'plan.json', {'resources': [[segment_url, path.name]]})
+        offline.playback('gimy', 'test', '1')
+        request = Request(dict(type='http', method='GET', path='/api/hls', scheme='http',
+                               query_string=b'', server=('localhost', 6970), headers=[(b'range', b'bytes=2-5')]))
+        with patch.object(hls_proxy, '_serve_media', side_effect=AssertionError('no origin needed')):
+            response = hls_proxy.serve_media(request, segment_url)
+        self.assertEqual((response.status_code, response.body), (206, b'2345'))
+        with patch.object(hls_proxy, '_nesthub_segment', return_value=Mock()) as convert:
+            request = Request(dict(type='http', method='GET', path='/api/hls', scheme='http',
+                                   query_string=b'nesthub=1', server=('localhost', 6970), headers=[]))
+            hls_proxy.serve_media(request, segment_url)
+        self.assertEqual(convert.call_args.args[2], b'0123456789')
+        self.assertIsNone(offline.cached_part(segment_url + '?new-signature'))
+        offline._write(path.with_name(path.name + '.download.json'), {**metadata, 'complete': False})
+        self.assertIsNone(offline.cached_part(segment_url))
+        offline._write(path.with_name(path.name + '.download.json'), metadata)
+        path.write_bytes(b'corruption')
+        self.assertIsNone(offline.cached_part(segment_url))
+        with self.assertRaises(security.UnsafeURL): hls_proxy.serve_media(request, 'http://127.0.0.1/private.ts')
+        with self.assertRaises(FileNotFoundError): offline.media_path(job['id'])
+        offline.delete([job['id']], {'gimy'})
+        self.assertIsNone(offline.cached_part(segment_url))
+
+    def test_cast_selection_cancels_download_without_touching_next_episode(self):
+        first, second = [offline.enqueue('gimy', 'test', str(i)) for i in (1, 2)]
+        session = cast_session.PlaybackSession(dict(uuid='test-tv', source='gimy', video_id='test', episode_id='1', autoplay_next=False))
+        try:
+            with patch.object(offline, 'fetch_detail', return_value=self.detail), patch.object(cast_session.cast, 'lan_media_origin', return_value='http://192.168.1.2:6970'), patch.object(cast_session.cast, 'check_media_origin'), patch.object(cast_session.cast, 'session_content', return_value=''), patch.object(cast_session.cast, 'play', return_value={'playing': True, 'duration': 0}):
+                session._load('1')
+            self.assertEqual(offline.status(first['id'])['phase'], 'cancelled')
+            self.assertEqual(offline.status(second['id'])['phase'], 'queued')
+        finally:
+            while not offline._queue.empty():
+                _, handle = offline._queue.get(); offline._release(handle)
 
 
 if __name__ == '__main__':

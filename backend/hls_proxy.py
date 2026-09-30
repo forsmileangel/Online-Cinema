@@ -252,10 +252,13 @@ def _nesthub_segment(request: Request, url: str, raw: bytes) -> Response:
 
 
 def serve_media(request: Request, raw_url: str) -> Response:
+    from . import offline
     next_buffer.foreground(True)
     try:
         url = assert_hls_url(raw_url)
-        saved = next_buffer.cached(url)
+        saved = offline.cached_part(url)
+        if saved is None:
+            saved = next_buffer.cached(url)
         if saved is not None:
             touch_media_host(url)
             path = urlparse(url).path.lower()

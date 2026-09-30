@@ -5,12 +5,15 @@ import type { Episode } from "../types";
 import "./Offline.css";
 
 type Download = { id: string; source: string; video_id: string; episode: string; title: string; episode_title: string; height: number; phase: string; progress: number; error: string; url?: string; size?: number; retry_attempt?: number; retry_at?: number };
-const active = (item: Download) => ["queued", "downloading", "retrying", "preparing", "cancelling"].includes(item.phase);
+const active = (item: Download) => ["queued", "downloading", "retrying", "preparing", "cancelling", "deleting"].includes(item.phase);
 async function request(url: string, body?: object, method = "GET") {
   const response = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
   const result = await response.json();
   if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "下載操作失敗，請重試");
   return result;
+}
+export function notifyOfflinePlayback(source: string, video_id: string, episode: string) {
+  return request("/api/offline/playback", { source, video_id, episode }, "POST");
 }
 function useDownloads(source?: string, id?: string) {
   const [items, setItems] = useState<Download[]>([]);
@@ -34,6 +37,8 @@ function useDownloads(source?: string, id?: string) {
   return { items, error, refresh: () => setRevision(n => n + 1) };
 }
 function label(item: Download) {
+  if (item.phase === "deleting") return "正在停止下載並刪除，完成後會自動移除";
+  if (item.phase === "delete_error") return `刪除未完成：${item.error}`;
   if (item.phase === "cancelling") return `正在取消下載 · 已保留 ${item.progress}% · 等待目前連線結束`;
   if (item.phase === "retrying") return `自動續傳中 · 已保留 ${item.progress}% · 第 ${item.retry_attempt || 1} 次重試 · 約 ${Math.max(0, Math.ceil((item.retry_at || 0) - Date.now() / 1000))} 秒後重連`;
   return item.phase === "complete" ? "已下載 · 優先本地播放" : item.phase === "queued" ? "等待下載" : item.phase === "preparing" ? "正在整理 MP4，尚未完成" : item.phase === "downloading" ? `下載中 ${item.progress}%` : item.error || "下載中斷";
@@ -45,7 +50,11 @@ function DownloadRow({ item, refresh }: { item: Download; refresh: () => void })
   async function act(restart = false) {
     setBusy(true); setError("");
     try {
-      if (active(item)) await request(`/api/offline/${item.id}/cancel`, {}, "POST");
+      if (item.phase === "delete_error") {
+        const result = await request("/api/offline/delete", { ids: [item.id] }, "POST");
+        if (result.errors.length) throw new Error(result.errors[0].error);
+      }
+      else if (active(item)) await request(`/api/offline/${item.id}/cancel`, {}, "POST");
       else await request("/api/offline", { source: item.source, video_id: item.video_id, episode: item.episode, height: item.height, restart }, "POST");
       refresh();
     } catch (err) { setError(err instanceof Error ? err.message : "操作失敗"); }
@@ -54,8 +63,8 @@ function DownloadRow({ item, refresh }: { item: Download; refresh: () => void })
   return <div style={{ borderTop: "1px solid #333", padding: "10px 0", display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
     <div>{item.title} · {item.episode_title} <span className="muted">{sources.find(s => s.id === item.source)?.label} · {item.height ? "720p" : "來源畫質"}</span></div>
     <div role="status">{label(item)}</div>
-    {item.phase === "complete" ? <Link className="btn alt" to={`${prefix}/watch/${encodeURIComponent(item.source)}/${encodeURIComponent(item.video_id)}?ep=${encodeURIComponent(item.episode)}`}>播放本地影片</Link> : <button className="btn alt" disabled={busy || item.phase === "cancelling"} onClick={() => void act()}>{item.phase === "cancelling" || busy && active(item) ? "取消中…" : active(item) ? "取消下載" : "繼續下載"}</button>}
-    {!active(item) && item.phase !== "complete" ? <button className="btn alt" disabled={busy} onClick={() => void act(true)}>重新下載</button> : null}
+    {item.phase === "complete" ? <Link className="btn alt" to={`${prefix}/watch/${encodeURIComponent(item.source)}/${encodeURIComponent(item.video_id)}?ep=${encodeURIComponent(item.episode)}`}>播放本地影片</Link> : <button className="btn alt" disabled={busy || item.phase === "cancelling" || item.phase === "deleting"} onClick={() => void act()}>{item.phase === "deleting" ? "刪除中…" : item.phase === "delete_error" ? "重試刪除" : item.phase === "cancelling" || busy && active(item) ? "取消中…" : active(item) ? "取消下載" : "繼續下載"}</button>}
+    {!active(item) && item.phase !== "complete" && item.phase !== "delete_error" ? <button className="btn alt" disabled={busy} onClick={() => void act(true)}>重新下載</button> : null}
     {error ? <p role="alert">{error}</p> : null}
   </div>;
 }
@@ -74,7 +83,7 @@ export function OfflinePanel({ source, id, episodes, current, local, onReady }: 
   useEffect(() => { dialog.current?.close(); setSelected(new Set()); setActionError(""); setMessage(""); }, [source, id]);
   useEffect(() => { onReady(items.filter(i => i.phase === "complete" && i.url).map(i => ({ episode: i.episode, url: i.url! }))); }, [items, onReady]);
   const choices = episodes.length ? episodes : [{ id: current, title: "目前影片" }];
-  const unavailable = (episode: string) => items.some(item => item.episode === episode && (active(item) || item.phase === "complete"));
+  const unavailable = (episode: string) => items.some(item => item.episode === episode && (active(item) || item.phase === "complete" || item.phase === "delete_error"));
   const available = choices.filter(ep => !unavailable(ep.id));
   const chosen = available.filter(ep => selected.has(ep.id));
   function open() {
@@ -103,7 +112,7 @@ export function OfflinePanel({ source, id, episodes, current, local, onReady }: 
   }
   return <details style={{ padding: "8px 16px" }} onKeyDown={e => e.stopPropagation()}>
     <summary>離線下載{local ? " · 目前使用本地影片" : ""}{items.some(active) ? " · 下載進行中" : ""}</summary>
-    <p className="muted">點擊才下載整集；完成後保留在 D:\AI工作區\離線影片。下載 720p 較適合平板與 Nest Hub；中斷後保留已下載部分，可按「繼續下載」。整理期間會使用電腦運算資源。</p>
+    <p className="muted">點擊才下載整集；完成後保留在 D:\AI工作區\離線影片。下載 720p 較適合平板與 Nest Hub；中斷後保留已下載部分，可按「繼續下載」。整理期間會使用電腦運算資源。開始播放同一集時會取消整集下載並保留進度；已驗證的相同 HLS 分段可重用，未下載部分仍需連線。</p>
     <button className="btn" disabled={busy} onClick={open}>選擇集數下載</button>
     <dialog ref={dialog} className="offline-download-dialog" aria-label="選擇離線下載集數" onKeyDown={e => e.stopPropagation()} onCancel={e => { if (busy) e.preventDefault(); }}>
       <div className="offline-download-header"><h2>選擇離線下載集數</h2><button className="btn alt" disabled={busy} onClick={() => dialog.current?.close()}>關閉</button></div>
@@ -171,19 +180,20 @@ export function OfflineLibrary() {
     setBusy(true); setMessage("");
     const ids = chosen.map(item => item.id), pending = new Set(ids);
     const errors: { id: string; error: string }[] = [];
-    let deleted = 0, failure = "";
+    let deleted = 0, deleting = 0, failure = "";
     try {
       for (let offset = 0; offset < ids.length; offset += 200) {
         setMessage(`正在刪除：${offset} / ${ids.length} 集`);
-        const result = await request("/api/offline/delete", { ids: ids.slice(offset, offset + 200) }, "POST") as { deleted: string[]; errors: { id: string; error: string }[] };
+        const result = await request("/api/offline/delete", { ids: ids.slice(offset, offset + 200) }, "POST") as { deleted: string[]; pending?: string[]; errors: { id: string; error: string }[] };
         for (const id of result.deleted) { pending.delete(id); deleted++; }
+        for (const id of result.pending || []) { pending.delete(id); deleting++; }
         errors.push(...result.errors);
       }
     } catch (err) { failure = err instanceof Error ? err.message : "刪除失敗"; }
     finally {
       setSelected(pending); setConfirm(false);
       const details = errors.map(item => `${items.find(i => i.id === item.id)?.episode_title || "影片"}：${item.error}`).join("；");
-      setMessage(`已刪除 ${deleted} 集。${pending.size ? `尚有 ${pending.size} 集保留勾選，可重試。` : ""}${[failure, details].filter(Boolean).join("；")}`);
+      setMessage(`已刪除 ${deleted} 集。${deleting ? `${deleting} 集正在停止下載並刪除，完成後會自動移除。` : ""}${pending.size ? `尚有 ${pending.size} 集保留勾選，可重試。` : ""}${[failure, details].filter(Boolean).join("；")}`);
       refresh(); setBusy(false);
     }
   }
@@ -197,7 +207,7 @@ export function OfflineLibrary() {
       {chosen.length ? <button className="btn alt" disabled={busy} onClick={() => { setSelected(new Set()); setConfirm(false); }}>取消選取</button> : null}
     </div>
     {confirm ? <div role="alertdialog" aria-label="確認刪除離線影片" style={{ border: "1px solid #ec604f", padding: 16, margin: "12px 0" }}>
-      <p>永久刪除所選 {chosen.length} 集？正在播放這些本地影片時可能中斷；仍在下載的項目需要先取消下載。</p>
+      <p>永久刪除所選 {chosen.length} 集？正在播放這些本地影片時可能中斷；仍在下載的項目會先自動取消，再刪除檔案；若檔案被其他程式占用，會顯示原因並保留重試操作。</p>
       <p>{[...new Set(chosen.map(item => item.title))].join("、")}</p>
       <button className="btn" disabled={busy} onClick={() => void remove()}>確認刪除 {chosen.length} 集</button>{" "}<button className="btn alt" disabled={busy} onClick={() => setConfirm(false)}>保留影片</button>
     </div> : null}

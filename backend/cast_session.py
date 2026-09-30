@@ -165,6 +165,8 @@ class PlaybackSession:
             title = f"{detail.title} {selected.title}" if selected else detail.title
         if not playlist:
             raise ValueError("這一集解析失敗，請重試")
+        if source and self.body.get("video_id"):
+            offline.playback(source, self.body["video_id"], episode)
         local_key = offline.media_key(playlist) if playlist.startswith("/api/offline/media/") else None
         parsed = urlparse(playlist)
         upstream = parse_qs(parsed.query).get("u", [])

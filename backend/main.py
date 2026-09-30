@@ -76,6 +76,7 @@ class AccessGuard(BaseHTTPMiddleware):
 
 
 app = FastAPI(title="Online Cinema", docs_url=None, redoc_url=None, openapi_url=None)
+app.add_event_handler("startup", offline._start_maintenance)
 app.add_middleware(AccessGuard)
 app.add_middleware(
     CORSMiddleware,
@@ -145,6 +146,17 @@ def offline_download(body: OfflineIn):
     try:
         return offline.enqueue(body.source, safe_video_id(body.video_id), body.episode, body.height, restart=body.restart)
     except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/offline/playback")
+def offline_playback(body: OfflineIn):
+    if body.source not in catalog.SOURCES:
+        raise HTTPException(400, "不支援的來源")
+    try:
+        offline.playback(body.source, safe_video_id(body.video_id), body.episode)
+        return {"ok": True}
+    except (OSError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
 

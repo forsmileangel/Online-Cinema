@@ -25,6 +25,9 @@ ROOT = Path(r'D:\AI工作區\離線影片')
 _queue = queue.Queue()
 _worker_lock = threading.Lock()
 _started = False
+_maintenance_started = False
+_lifecycle_lock = threading.RLock()
+_playback_parts = {}
 
 
 def identity(source, video_id, episode):
@@ -49,7 +52,7 @@ def _read(path):
 
 
 def _write(path, value):
-    temporary = path.with_suffix('.tmp')
+    temporary = path.with_name(f'delete.{os.getpid()}.{threading.get_ident()}.tmp') if path.name == 'delete.json' else path.with_suffix('.tmp')
     temporary.write_text(json.dumps(value, ensure_ascii=False), encoding='utf-8')
     # Windows readers/virus scanners can briefly hold the destination open.
     for attempt in range(10):
@@ -83,6 +86,8 @@ def _release(handle):
 def media_path(key):
     folder = _folder(key)
     record = _read(folder / 'complete.json')
+    if (folder / 'delete.json').exists():
+        raise FileNotFoundError('影片正在刪除')
     path = folder / 'video.mp4'
     try:
         if (record and record.get('size', 0) > 0 and path.resolve().parent == folder.resolve()
@@ -108,6 +113,10 @@ def media_key(url):
 
 def status(key):
     folder = _folder(key)
+    deletion = _read(folder / 'delete.json')
+    if deletion:
+        return {**deletion['item'], 'phase': 'delete_error' if deletion.get('error') else 'deleting',
+                'error': deletion.get('error', '')}
     record = _read(folder / 'complete.json')
     if record:
         try:
@@ -132,6 +141,7 @@ def status(key):
 
 
 def listing(sources, source=None, video_id=None):
+    _start_maintenance()
     result = []
     if ROOT.exists():
         for path in ROOT.iterdir():
@@ -200,6 +210,7 @@ def fetch_detail(source, video_id, episode=None):
 
 def enqueue(source, video_id, episode='', height=720, restart=False):
     global _started
+    _start_maintenance()
     key = identity(source, video_id, episode)
     existing = status(key)
     if existing and existing['phase'] not in ('error', 'cancelled'):
@@ -208,6 +219,9 @@ def enqueue(source, video_id, episode='', height=720, restart=False):
     handle = _claim(folder)
     if handle is None:
         return status(key) or {'id': key, 'phase': 'queued'}
+    if (folder / 'delete.json').exists():
+        _release(handle)
+        return status(key)
     item = dict(id=key, source=source, video_id=video_id, episode=episode, title=video_id,
                 episode_title=episode, height=height, phase='queued', progress=0, error='', created=time.time())
     if existing:
@@ -234,57 +248,177 @@ def enqueue(source, video_id, episode='', height=720, restart=False):
     return item
 
 
-def cancel(key):
-    item = status(key)
-    if not item or item['phase'] not in ('queued', 'downloading', 'retrying', 'preparing', 'cancelling'):
-        return
-    folder = _folder(key)
-    (folder / 'cancel').touch()
-    removed = None
-    # The worker and cancellation must not take the same queued task. A running
-    # task (including one owned by the other app) observes the shared marker.
+def _remove_queued(key):
     with _queue.mutex:
-        removed = next((entry for entry in _queue.queue if entry[0]['id'] == key), None)
-        if removed:
-            _write(folder / 'status.json', {**removed[0], 'phase': 'cancelled',
-                                          'error': '已取消下載；已下載部分保留，可繼續下載'})
-            _queue.queue.remove(removed)
+        entry = next((entry for entry in _queue.queue if entry[0]['id'] == key), None)
+        if entry:
+            folder = _folder(key)
+            _write(folder / 'status.json', {**entry[0], 'phase': 'cancelled', 'error': _cancel_message(folder)})
+            _queue.queue.remove(entry)
             _queue.unfinished_tasks -= 1
             _queue.not_full.notify()
             if _queue.unfinished_tasks == 0:
                 _queue.all_tasks_done.notify_all()
-    if removed:
-        _release(removed[1])
+    if entry:
+        _release(entry[1])
+
+
+def _cancel_message(folder):
+    try:
+        return (folder / 'cancel').read_text(encoding='utf-8') or '已取消下載；已下載部分保留，可繼續下載'
+    except OSError:
+        return '已停止下載；已下載部分保留，可繼續下載'
+
+
+def cancel(key, reason=''):
+    item = status(key)
+    if not item or item['phase'] not in ('queued', 'downloading', 'retrying', 'preparing', 'cancelling', 'deleting'):
+        return
+    folder = _folder(key)
+    (folder / 'cancel').write_text(reason, encoding='utf-8')
+    _remove_queued(key)
+
+
+def playback(source, video_id, episode=''):
+    """Actual playback only: metadata resolution/prefetch must not call this."""
+    key = identity(source, video_id, episode)
+    item = status(key)
+    if not item or item['phase'] in ('complete', 'deleting', 'delete_error'):
+        return
+    cancel(key, '已開始播放此集，整集下載已取消；已下載部分保留，可繼續下載')
+    folder = _folder(key)
+    work = folder / 'parts'
+    if work.resolve().parent != folder.resolve() or work.is_symlink():
+        return
+    plan = _read(work / 'plan.json') or {}
+    resources = {}
+    for remote, filename in plan.get('resources', []):
+        if re.fullmatch(r'\d{6}\.(ts|key|mp4)', filename):
+            resources[remote] = filename
+    if resources:
+        with _lifecycle_lock:
+            _playback_parts.pop(key, None)
+            _playback_parts[key] = (time.monotonic(), resources)
+            while len(_playback_parts) > 8:
+                _playback_parts.pop(next(iter(_playback_parts)))
+
+
+def cached_part(url):
+    """Reuse exact, complete HLS resources; never expose an unfinished MP4."""
+    with _lifecycle_lock:
+        entries = list(_playback_parts.items())
+    for key, (created, resources) in reversed(entries):
+        if time.monotonic() - created > 7200 or url not in resources:
+            continue
+        try:
+            folder = _folder(key)
+            work = folder / 'parts'
+            path = work / resources[url]
+            if ((folder / 'delete.json').exists() or work.resolve().parent != folder.resolve()
+                    or work.is_symlink() or path.is_symlink() or path.resolve().parent != work.resolve()):
+                continue
+            record = _read(path.with_name(path.name + '.download.json')) or {}
+            if not record.get('complete') or record.get('url') != url or not 0 < record.get('size', 0) <= next_buffer.MAX_SEGMENT:
+                continue
+            # Validate the bytes returned, not an earlier hash of a mutable file.
+            with path.open('rb') as stream:
+                data = stream.read(next_buffer.MAX_SEGMENT + 1)
+            if len(data) == record['size'] and hashlib.sha256(data).hexdigest() == record.get('sha256'):
+                return data
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _finish_delete(key):
+    folder = _folder(key)
+    marker = _read(folder / 'delete.json')
+    if not marker:
+        return True
+    handle = _claim(folder)
+    if handle is None:
+        return False
+    try:
+        marker = _read(folder / 'delete.json')
+        if not marker:
+            return True  # Another app already finished while we acquired the lock.
+        work = folder / 'parts'
+        if work.resolve().parent != folder.resolve() or work.is_symlink():
+            raise ValueError('無效的下載資料夾')
+        # Retain the deletion journal AND status until every media file is gone.
+        # A Windows file lock can then be retried without orphaning the item.
+        for name in ('video.mp4', 'video.part.mp4', 'conversion.txt', 'conversion.log'):
+            (folder / name).unlink(missing_ok=True)
+        if work.exists():
+            shutil.rmtree(work)
+        for name in ('complete.json', 'status.json', 'complete.tmp', 'status.tmp', 'cancel'):
+            (folder / name).unlink(missing_ok=True)
+        (folder / 'delete.json').unlink(missing_ok=True)
+        return True
+    except Exception as exc:
+        message = '檔案仍被使用，請停止播放後重試刪除' if isinstance(exc, PermissionError) else str(exc)
+        _write(folder / 'delete.json', {**marker, 'error': message})
+        raise ValueError(message) from exc
+    finally:
+        _release(handle)
 
 
 def delete(keys, sources):
-    deleted, errors = [], []
+    deleted, pending, errors = [], [], []
     for key in dict.fromkeys(keys):
-        handle = None
         try:
-            folder = _folder(key)
-            item = status(key)
-            if not item or item['source'] not in sources:
-                raise ValueError('找不到下載項目')
-            handle = _claim(folder)
-            if handle is None:
-                raise ValueError('此集仍在下載，請先取消下載再刪除')
-            # Remove the movie first: if a player has it locked, retain metadata.
-            (folder / 'video.mp4').unlink(missing_ok=True)
-            for name in ('complete.json', 'status.json', 'complete.tmp', 'status.tmp', 'cancel',
-                         'video.part.mp4', 'conversion.txt', 'conversion.log'):
-                (folder / name).unlink(missing_ok=True)
-            work = folder / 'parts'
-            if work.exists() and work.resolve().parent == folder.resolve() and not work.is_symlink():
-                shutil.rmtree(work)
-            # Keep the empty lock file/folder so another process cannot bypass it.
-            deleted.append(key)
+            with _lifecycle_lock:
+                folder = _folder(key)
+                item = status(key)
+                if item is None:
+                    deleted.append(key)  # Repeating a successful deletion is safe.
+                    continue
+                if item['source'] not in sources:
+                    raise ValueError('找不到下載項目')
+                _write(folder / 'delete.json', {'item': item, 'error': ''})
+                cancel(key)
+                (deleted if _finish_delete(key) else pending).append(key)
         except Exception as exc:
-            errors.append({'id': key, 'error': '檔案仍被使用，請停止播放後重試' if isinstance(exc, PermissionError) else str(exc)})
-        finally:
-            if handle is not None:
-                _release(handle)
-    return {'deleted': deleted, 'errors': errors}
+            errors.append({'id': key, 'error': str(exc)})
+    _start_maintenance()
+    return {'deleted': deleted, 'pending': pending, 'errors': errors}
+
+
+def _maintenance_once():
+    # Each app releases its own queued locks, including cancellation initiated
+    # by the other app. A download blocked on network I/O cannot stall this.
+    with _queue.mutex:
+        queued = [entry[0]['id'] for entry in _queue.queue]
+    for key in queued:
+        if (_folder(key) / 'cancel').exists():
+            _remove_queued(key)
+    if ROOT.exists():
+        for folder in ROOT.iterdir():
+            if not re.fullmatch(r'[0-9a-f]{64}', folder.name):
+                continue
+            with _lifecycle_lock:
+                marker = _read(_folder(folder.name) / 'delete.json')
+                if marker and not marker.get('error'):
+                    try:
+                        _finish_delete(folder.name)
+                    except (OSError, ValueError):
+                        pass  # Persistent, visible error; explicit retry required.
+
+
+def _start_maintenance():
+    global _maintenance_started
+    with _worker_lock:
+        if _maintenance_started:
+            return
+        _maintenance_started = True
+        def maintain():
+            while True:
+                try:
+                    _maintenance_once()
+                except Exception:
+                    logging.getLogger(__name__).exception('Offline cleanup failed')
+                time.sleep(1)
+        threading.Thread(target=maintain, name='offline-cleanup', daemon=True).start()
 
 
 class Cancelled(Exception):
@@ -292,7 +426,7 @@ class Cancelled(Exception):
 
 
 def _check(folder):
-    if (folder / 'cancel').exists():
+    if (folder / 'cancel').exists() or (folder / 'delete.json').exists():
         raise Cancelled()
     if shutil.disk_usage(folder).free < 512 * 1024 * 1024:
         raise ValueError('硬碟剩餘空間不足 512 MB，已停止下載')
@@ -646,7 +780,7 @@ def _run(item):
         _write(folder / 'complete.json', dict(item=item, detail=detail.model_dump(), size=(folder / 'video.mp4').stat().st_size))
         save(phase='complete', error='')
     except Cancelled:
-        save(phase='cancelled', error='已停止下載；已下載部分保留，可繼續下載')
+        save(phase='cancelled', error=_cancel_message(folder))
     except Exception as exc:
         save(phase='error', error=str(exc) or '下載失敗，請重試')
     finally:

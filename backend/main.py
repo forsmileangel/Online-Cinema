@@ -76,7 +76,7 @@ class AccessGuard(BaseHTTPMiddleware):
 
 
 app = FastAPI(title="Online Cinema", docs_url=None, redoc_url=None, openapi_url=None)
-app.add_event_handler("startup", offline._start_maintenance)
+app.router.add_event_handler("startup", offline._start_maintenance)
 app.add_middleware(AccessGuard)
 app.add_middleware(
     CORSMiddleware,

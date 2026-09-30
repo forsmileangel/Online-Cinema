@@ -201,7 +201,7 @@ export function OfflineLibrary() {
     <p className="muted">自動預載是有期限的暫存；此處管理手動下載的整集影片。支援依劇名全選，以及按住 Shift 連續勾選。</p>
     <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", position: "sticky", top: 0, background: "#17171d", padding: 12, zIndex: 2 }}>
       <input className="field" aria-label="搜尋離線影片" disabled={busy} placeholder="搜尋劇名、集數" value={query} onChange={e => { setQuery(e.target.value); setConfirm(false); }} />
-      <label><input type="checkbox" aria-label="全選搜尋結果" disabled={busy} checked={visible.length > 0 && visible.every(item => selected.has(item.id))} onChange={e => select(visible.map(item => item.id), e.target.checked)} /> 全選搜尋結果</label>
+      <label className="offline-selection"><input type="checkbox" aria-label="全選搜尋結果" disabled={busy} checked={visible.length > 0 && visible.every(item => selected.has(item.id))} onChange={e => select(visible.map(item => item.id), e.target.checked)} /> 全選搜尋結果</label>
       <span>{chosen.length} 集已選 · {size(chosen.reduce((sum, item) => sum + (item.size || 0), 0))}</span>
       <button className="btn alt" disabled={!chosen.length || busy} onClick={() => setConfirm(true)}>刪除選取（{chosen.length}）</button>
       {chosen.length ? <button className="btn alt" disabled={busy} onClick={() => { setSelected(new Set()); setConfirm(false); }}>取消選取</button> : null}
@@ -216,9 +216,15 @@ export function OfflineLibrary() {
     {!items.length && !error ? <p>尚未下載影片。請到播放頁展開「離線下載」，點「選擇集數下載」，勾選想下載的集數。</p> : null}
     {items.length && !visible.length ? <p>沒有符合的離線影片。</p> : null}
     {[...groups].map(([key, group]) => <section key={key} style={{ marginTop: 24 }}>
-      <h2><label><input type="checkbox" aria-label={`全選劇集：${group[0].title}`} disabled={busy} checked={group.every(item => selected.has(item.id))} onChange={e => select(group.map(item => item.id), e.target.checked)} /> {group[0].title}（{group.length} 集）</label></h2>
+      <h2><label className="offline-selection"><input type="checkbox" aria-label={`全選劇集：${group[0].title}`} disabled={busy} checked={group.every(item => selected.has(item.id))} onChange={e => select(group.map(item => item.id), e.target.checked)} /> {group[0].title}（{group.length} 集）</label></h2>
       {group.map(item => <div key={item.id} style={{ display: "flex", gap: 12, alignItems: "center" }}>
-        <input type="checkbox" aria-label={`選取 ${item.episode_title}`} disabled={busy} checked={selected.has(item.id)} onChange={e => pick(item, e.target.checked, (e.nativeEvent as MouseEvent).shiftKey)} />
+        <label className="offline-selection offline-item-selection" onClick={e => {
+          if (e.target !== e.currentTarget) return;
+          e.preventDefault();
+          if (!busy) { pick(item, !selected.has(item.id), e.shiftKey); e.currentTarget.querySelector("input")?.focus(); }
+        }}>
+          <input type="checkbox" aria-label={`選取 ${item.episode_title}`} disabled={busy} checked={selected.has(item.id)} onChange={e => pick(item, e.target.checked, (e.nativeEvent as MouseEvent).shiftKey)} />
+        </label>
         <div style={{ flex: 1 }}><DownloadRow item={item} refresh={refresh} /></div>
       </div>)}
     </section>)}

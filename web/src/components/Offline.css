@@ -42,5 +42,28 @@
 }
 .offline-download-episode:last-child { border-bottom: 0; }
 .offline-download-episode small { grid-column: 2; overflow-wrap: anywhere; }
-.offline-download-episode input { width: 18px; height: 18px; margin: 0; }
+.offline-selection {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 10px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.offline-item-selection { align-self: stretch; flex-shrink: 0; }
+.offline-selection:hover, .offline-item-selection:has(input:checked) { background: var(--bg-2); }
+.offline-selection:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.offline-selection:has(input:disabled) { cursor: not-allowed; opacity: .6; }
+.offline-selection input[type="checkbox"], .offline-download-episode input {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: inherit;
+}
 .offline-download-footer { padding-top: 8px; border-top: 1px solid var(--line); }

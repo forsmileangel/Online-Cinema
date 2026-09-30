@@ -9,7 +9,7 @@ import time
 import uuid as uuid_module
 from urllib.parse import parse_qs, urlparse
 
-from . import cast, catalog, db, hls_proxy, sites
+from . import cast, catalog, db, hls_proxy, sites, next_buffer, offline
 from .security import SiteBusy, assert_hls_url, safe_video_id
 
 SERIES_SOURCES = {"hongguo", "chinaq", "gimy", "dramaq", "mmov"}
@@ -59,6 +59,7 @@ class PlaybackSession:
         with self.lock:
             if not self.cancelled.is_set():
                 self.snapshot.update(values)
+        self.warm_next()
         self.checkpoint()
 
     def checkpoint(self):
@@ -79,6 +80,19 @@ class PlaybackSession:
             }, ensure_ascii=False)
             db.set_setting("cast_session:" + self.uuid, saved)
             self.last_checkpoint, self.checkpoint_state = now, state
+
+    def warm_next(self):
+        owner = "cast-" + self.id
+        if not self.valid() or not self.prefetched or not self.snapshot["autoplay_next"] or self.snapshot["phase"] in TERMINAL or self.prefetched[2].playlist.startswith("/api/offline/media/"):
+            next_buffer.cancel(owner)
+            return
+        state = self.snapshot
+        ready = bool(state.get("playing") and not state.get("buffering") and state.get("current_time", 0) >= 30)
+        try:
+            next_buffer.update(owner, self.prefetched[2].playlist, ready,
+                               720 if "nesthub=1" in state.get("content_id", "") else 0)
+        except Exception:
+            pass  # A warm-up failure cannot stop receiver playback.
 
     def valid(self):
         return not self.cancelled.is_set() and not self.stop_requested.is_set()
@@ -116,9 +130,10 @@ class PlaybackSession:
         self.prefetching = True
         def resolve():
             try:
-                detail = sites.get(self.body["source"]).fetch_video(self.body["video_id"], ep=target)
+                detail = offline.fetch_detail(self.body["source"], self.body["video_id"], target)
                 if self.valid() and self.epoch == epoch:
                     self.prefetched = (target, time.monotonic(), detail)
+                    self.warm_next()
             except Exception:
                 pass  # Retry on demand; a broken next episode cannot stop this one.
             finally:
@@ -135,10 +150,11 @@ class PlaybackSession:
         playlist = self.body.get("url", "")
         title = self.body.get("title", "")
         source = self.body.get("source")
-        if source in SERIES_SOURCES and self.body.get("video_id"):
+        local = offline.local_detail(source, self.body["video_id"], episode or None) if self.body.get("video_id") else None
+        if local or (source in SERIES_SOURCES and self.body.get("video_id")):
             cached = self.prefetched
             self.prefetched = None
-            detail = cached[2] if cached and cached[0] == episode and time.monotonic() - cached[1] < 120 else sites.get(source).fetch_video(self.body["video_id"], ep=episode or None)
+            detail = local or (cached[2] if cached and cached[0] == episode and time.monotonic() - cached[1] < 120 else offline.fetch_detail(source, self.body["video_id"], episode or None))
             self.detail = detail
             self.episode_ids = [e.id for e in detail.episodes]
             episode = episode or detail.resolved_episode_id or (self.episode_ids[0] if self.episode_ids else "")
@@ -149,17 +165,18 @@ class PlaybackSession:
             title = f"{detail.title} {selected.title}" if selected else detail.title
         if not playlist:
             raise ValueError("這一集解析失敗，請重試")
+        local_key = offline.media_key(playlist) if playlist.startswith("/api/offline/media/") else None
         parsed = urlparse(playlist)
         upstream = parse_qs(parsed.query).get("u", [])
-        if parsed.scheme or parsed.netloc or parsed.path != "/api/hls" or len(upstream) != 1:
+        if not local_key and (parsed.scheme or parsed.netloc or parsed.path != "/api/hls" or len(upstream) != 1):
             raise ValueError("請從影片頁選擇可播放的串流")
-        upstream = assert_hls_url(upstream[0])
+        upstream = assert_hls_url(upstream[0]) if not local_key else ""
         if not self.valid():
             return
         origin = cast.lan_media_origin(self.uuid)
         cast.check_media_origin(origin)
-        url = hls_proxy.proxied_media(upstream, origin)
-        mime = "video/mp4" if urlparse(upstream).path.lower().endswith(".mp4") else "application/vnd.apple.mpegurl"
+        url = origin + offline.media_url(local_key) if local_key else hls_proxy.proxied_media(upstream, origin)
+        mime = "video/mp4" if local_key or urlparse(upstream).path.lower().endswith(".mp4") else "application/vnd.apple.mpegurl"
         self.publish(playlist=playlist, title=title, episode_id=episode)
         marker = f"{self.id}-{self.epoch}"
         state = cast.play(url, mime, title, position, self.uuid, guard=self.valid, marker=marker, expected=cast.session_content(self.uuid, self.id) or self.snapshot["content_id"])

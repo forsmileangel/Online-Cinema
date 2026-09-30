@@ -53,6 +53,7 @@ export function TopBar() {
         <NavLink to={`${prefix}/#picks`} className="hide-sm">
           選片
         </NavLink>
+        <NavLink to={`${prefix}/offline`}>離線影片</NavLink>
         <NavLink to={`${prefix}/favorites`}>收藏</NavLink>
         {tv ? null : (
           <NavLink to="/settings">

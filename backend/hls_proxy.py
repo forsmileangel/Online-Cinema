@@ -10,6 +10,7 @@ from starlette.background import BackgroundTask
 from starlette.requests import Request
 from urllib.parse import urlparse
 
+from . import next_buffer
 from . import http_client, seg_cache, lan
 from .security import (
     UnsafeURL,
@@ -109,6 +110,10 @@ def _read_playlist(upstream_url: str, deadline: float) -> tuple[str, str]:
     left = deadline - time.monotonic()
     if left <= 0:
         raise TimeoutError("播放清單讀取逾時，請重試")
+    saved = next_buffer.cached(upstream_url)
+    if saved is not None:
+        touch_media_host(upstream_url)
+        return saved.decode("utf-8", "replace"), upstream_url
     referer, impersonate = _media_context(upstream_url)
     response = http_client.fetch_bytes(upstream_url, referer=referer, allowed_hosts=hls_allowed_hosts(upstream_url),
                                        timeout=min(left, 10), impersonate=impersonate, redirect_validator=_playlist_media_url)
@@ -247,6 +252,44 @@ def _nesthub_segment(request: Request, url: str, raw: bytes) -> Response:
 
 
 def serve_media(request: Request, raw_url: str) -> Response:
+    next_buffer.foreground(True)
+    try:
+        url = assert_hls_url(raw_url)
+        saved = next_buffer.cached(url)
+        if saved is not None:
+            touch_media_host(url)
+            path = urlparse(url).path.lower()
+            playlist = path.endswith(".m3u8")
+            if playlist:
+                text = rewrite_playlist(saved.decode("utf-8", "replace"), url, str(request.base_url).rstrip("/"),
+                                        nesthub=request.query_params.get("nesthub") == "1", web=request.query_params.get("web") == "1")
+                body = text.encode()
+                return Response(b"" if request.method == "HEAD" else body, media_type="application/vnd.apple.mpegurl",
+                                headers={"Cache-Control": "no-store", "Content-Length": str(len(body))})
+            if request.query_params.get("nesthub") == "1":
+                return _nesthub_segment(request, url, saved)
+            mime = "video/mp4" if path.endswith((".mp4", ".m4s")) else "video/mp2t" if path.endswith((".ts", ".jpeg", ".jpg")) else "application/octet-stream"
+            headers = {"Cache-Control": "private, max-age=3600", "Accept-Ranges": "bytes"}
+            total, status = len(saved), 200
+            raw_range = request.headers.get("range")
+            if raw_range:
+                match = re.fullmatch(r"bytes=(\d*)-(\d*)", raw_range)
+                if not match or not any(match.groups()):
+                    return Response(status_code=416, headers={"Content-Range": f"bytes */{total}"})
+                start = int(match[1]) if match[1] else max(0, total - int(match[2]))
+                end = min(int(match[2]), total - 1) if match[1] and match[2] else total - 1
+                if start > end or start >= total:
+                    return Response(status_code=416, headers={"Content-Range": f"bytes */{total}"})
+                saved, status = saved[start:end + 1], 206
+                headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+            headers["Content-Length"] = str(len(saved))
+            return Response(b"" if request.method == "HEAD" else saved, status_code=status, media_type=mime, headers=headers)
+        return _serve_media(request, raw_url)
+    finally:
+        next_buffer.foreground(False)
+
+
+def _serve_media(request: Request, raw_url: str) -> Response:
     url = assert_hls_url(raw_url)
     parsed = urlparse(url)
     referer, imp = _media_context(url)

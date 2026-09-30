@@ -200,7 +200,7 @@ export function Player({
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !src.startsWith("/api/hls")) return;
+    if (!video || !(src.startsWith("/api/hls") || /^\/api\/offline\/media\/[a-f0-9]{64}\.mp4$/.test(src))) return;
     setPlayError("");
     failureReported.current = false;
     setQualityError("");
@@ -239,8 +239,8 @@ export function Player({
         lowLatencyMode: false,
         startFragPrefetch: true,
         testBandwidth: false,
-        maxBufferLength: 60,
-        maxMaxBufferLength: 180,
+        maxBufferLength: 180,
+        maxMaxBufferLength: 600,
         maxBufferSize: 80 * 1000 * 1000,
         backBufferLength: 45,
         abrEwmaDefaultEstimate: 8_000_000,

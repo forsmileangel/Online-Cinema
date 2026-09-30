@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { OfflinePanel } from "../components/Offline";
+import { NextEpisodeBuffer } from "../components/NextEpisodeBuffer";
 import { CastBar } from "../components/CastBar";
 import { Player } from "../components/Player";
 import { PosterRow } from "../components/PosterRow";
@@ -73,6 +75,8 @@ function FavUnderFs({ on, onClick }: { on: boolean; onClick: () => void }) {
 export function Watch() {
   const { prefix, zhMap } = useSource();
   const { id = "", source: sourceParam } = useParams();
+  const [searchParams] = useSearchParams();
+  const requestedEpisode = searchParams.get("ep") || undefined;
   const source = sourceParam && sourceParam !== "watch" ? sourceParam : "hongguo";
   const [data, setData] = useState<VideoDetail | null>(null);
   const [err, setErr] = useState("");
@@ -116,11 +120,11 @@ export function Watch() {
     endLock.current = "";
     const controller = new AbortController();
     api
-      .video(id, source, controller.signal)
+      .video(id, source, controller.signal, requestedEpisode)
       .then((next) => { if (!controller.signal.aborted) { posRef.current = next.position_sec || 0; setData(next); } })
       .catch((e: Error) => { if (!controller.signal.aborted) setErr(e.message); });
     return () => controller.abort();
-  }, [id, source]);
+  }, [id, source, requestedEpisode]);
 
   useEffect(() => {
     if (!data) return;
@@ -272,6 +276,15 @@ export function Watch() {
     return () => observer.disconnect();
   }, [activeEp, episodes.length]);
 
+  const downloaded = useCallback((items: { episode: string; url: string }[]) => {
+    setData(prev => {
+      if (!prev) return prev;
+      const updates = items.filter(item => item.episode !== activeEp && prev.episodes?.some(ep => ep.id === item.episode && ep.playlist !== item.url));
+      if (!updates.length) return prev;
+      return { ...prev, episodes: prev.episodes?.map(ep => ({ ...ep, playlist: updates.find(item => item.episode === ep.id)?.url || ep.playlist })) };
+    });
+  }, [activeEp]);
+
   function pickEpisode(nextId: string) {
     if (nextId === epId) return;
     if (cast.active) { void cast.episode(nextId); return; }
@@ -364,6 +377,12 @@ export function Watch() {
             {episodeError ? <p className="banner err" role="alert">{episodeError} <button className="btn" onClick={() => retryEpisode()}>重試這一集</button></p> : null}
           </div>
           <CastBar controller={cast} currentEpisode={currentEp?.title} currentTitle={title} />
+          <OfflinePanel key={`${source}:${id}`} source={source} id={id} episodes={episodes} current={activeEp}
+            local={playlist.startsWith("/api/offline/media/")} onReady={downloaded} />
+          <NextEpisodeBuffer key={`${source}:${id}:${activeEp}`} enabled={autoplay}
+            url={episodes[epIds.indexOf(activeEp) + 1]?.playlist || ""}
+            title={episodes[epIds.indexOf(activeEp) + 1]?.title || ""}
+            castSession={cast.active?.session_id} qualityKey="cinema.quality" />
         </div>
         {manyEps ? (
           <aside className="ep-rail" aria-label="選集">

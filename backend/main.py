@@ -17,6 +17,7 @@ from . import cast_devices as known_devices
 from . import db
 from . import lan
 from . import tv_session
+from . import next_buffer, offline
 from . import hls_proxy
 from . import http_client
 from . import settings as S
@@ -24,6 +25,9 @@ from . import sites
 from . import translate as translate_mod
 from .models import (
     FavoriteIn,
+    PrefetchIn,
+    OfflineIn,
+    OfflineDeleteIn,
     HistoryIn,
     HomePayload,
     HomeRow,
@@ -61,7 +65,7 @@ class AccessGuard(BaseHTTPMiddleware):
             return JSONResponse({"detail": "僅本機。請在設定開啟電視連線後重開 start.bat。"}, status_code=403)
         if lan_on and not lan.is_loopback(client):
             path = request.url.path
-            if path.startswith("/assets") or path.startswith("/api/hls") or path.startswith("/api/img"):
+            if path.startswith("/assets") or path.startswith("/api/hls") or path.startswith("/api/img") or path.startswith("/api/offline/media/"):
                 return await call_next(request)
             if path in ("/api/tv/pair", "/api/health", "/favicon.ico"):
                 return await call_next(request)
@@ -90,7 +94,7 @@ app.add_middleware(
 async def media_cors(request: Request, call_next):
     # Receiver apps run on Google/LG origins. Only the media endpoint is public
     # across origins; the existing LAN gate still protects every media request.
-    if request.url.path != "/api/hls":
+    if request.url.path != "/api/hls" and not request.url.path.startswith("/api/offline/media/"):
         return await call_next(request)
     if request.method == "OPTIONS":
         client = request.client.host if request.client else "127.0.0.1"
@@ -110,7 +114,7 @@ async def media_cors(request: Request, call_next):
     })
     if request.method != "OPTIONS" and response.status_code < 400:
         media_url = parse_qs(request.url.query).get("u", [""])[0]
-        seek = "01" if urlparse(media_url).path.lower().endswith(".mp4") else "00"
+        seek = "01" if request.url.path.startswith("/api/offline/media/") or urlparse(media_url).path.lower().endswith(".mp4") else "00"
         response.headers["transferMode.dlna.org"] = "Streaming"
         response.headers["contentFeatures.dlna.org"] = f"DLNA.ORG_OP={seek};DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
     return response
@@ -126,6 +130,51 @@ def _err(exc: Exception, status: int = 400) -> HTTPException:
     if isinstance(exc, UnsafeURL):
         return HTTPException(status, "請求被拒絕")
     return HTTPException(502, "來源站暫時無法使用")
+
+
+
+@app.get("/api/offline")
+def offline_list(source: str | None = None, video_id: str | None = None):
+    return {"directory": str(offline.ROOT), "items": offline.listing(catalog.SOURCES, source, video_id)}
+
+
+@app.post("/api/offline")
+def offline_download(body: OfflineIn):
+    if body.source not in catalog.SOURCES:
+        raise HTTPException(400, "不支援的來源")
+    try:
+        return offline.enqueue(body.source, safe_video_id(body.video_id), body.episode, body.height)
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/offline/delete")
+def offline_delete(body: OfflineDeleteIn):
+    return offline.delete(body.ids, catalog.SOURCES)
+
+
+@app.post("/api/offline/{key}/cancel")
+def offline_cancel(key: str):
+    try:
+        item = offline.status(key)
+        if not item or item['source'] not in catalog.SOURCES:
+            raise ValueError("找不到下載項目")
+        offline.cancel(key)
+        return {"ok": True}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.api_route("/api/offline/media/{key}.mp4", methods=["GET", "HEAD"])
+def offline_media(key: str):
+    try:
+        path = offline.media_path(key)
+        item = offline.status(key)
+        if item['source'] not in catalog.SOURCES:
+            raise FileNotFoundError()
+        return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "private, no-cache"})
+    except (OSError, ValueError) as exc:
+        raise HTTPException(404, "找不到完整的本地影片") from exc
 
 
 @app.get("/api/health")
@@ -215,10 +264,9 @@ def video_on_source(source: str, video_id: str, ep: str | None = Query(None, max
     src = catalog.normalize_source(source)
     try:
         video_id = safe_video_id(video_id)
-        site = sites.get(src)
         hist = db.get_history_item(video_id, src)
         selected_ep = ep or (hist.get("episode_id") if hist else None)
-        detail = site.fetch_video(video_id, ep=selected_ep)
+        detail = offline.fetch_detail(src, video_id, selected_ep)
         detail.source = src
         detail.favorited = db.is_favorite(video_id, src)
         if detail.episodes and not detail.resolved_episode_id:
@@ -400,19 +448,23 @@ def cast_play(body: CastPlayIn):
             return JSONResponse(cast_session.start({**body.model_dump(), "uuid": uuid}), status_code=202)
         except Exception as e:
             raise HTTPException(400, str(e)) from e
+    try:
+        local_key = offline.media_key(body.url) if body.url.startswith("/api/offline/media/") else None
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, "本地影片已移除，請重新選片") from exc
     parsed = urlparse(body.url)
     urls = parse_qs(parsed.query).get("u", [])
-    if parsed.scheme or parsed.netloc or parsed.path != "/api/hls" or len(urls) != 1:
+    if not local_key and (parsed.scheme or parsed.netloc or parsed.path != "/api/hls" or len(urls) != 1):
         raise HTTPException(400, "請從影片頁選擇可播放的串流")
     try:
-        upstream = assert_hls_url(urls[0])
+        upstream = assert_hls_url(urls[0]) if not local_key else ""
         uuid = body.uuid or chromecast.selected_uuid()
         if not uuid:
             raise HTTPException(400, "請先選一台電視")
         origin = chromecast.lan_media_origin(uuid)
         chromecast.check_media_origin(origin)
-        url = hls_proxy.proxied_media(upstream, origin)
-        mime = "video/mp4" if urlparse(upstream).path.lower().endswith(".mp4") else "application/vnd.apple.mpegurl"
+        url = origin + offline.media_url(local_key) if local_key else hls_proxy.proxied_media(upstream, origin)
+        mime = "video/mp4" if local_key or urlparse(upstream).path.lower().endswith(".mp4") else "application/vnd.apple.mpegurl"
         cast_session.cancel(uuid)
         return chromecast.play(url, mime, body.title, body.position_sec, uuid)
     except HTTPException:
@@ -543,6 +595,25 @@ def web_720p(u: str = Query(..., max_length=4000)):
         raise HTTPException(422, str(e)) from e
     except Exception as e:
         raise _err(e) from e
+
+
+@app.post("/api/playback/prefetch")
+def prefetch_next_episode(body: PrefetchIn):
+    try:
+        return next_buffer.update(body.owner, body.url, body.ready, body.height, body.retry)
+    except Exception as e:
+        raise _err(e) from e
+
+
+@app.get("/api/playback/prefetch/{owner}")
+def prefetch_status(owner: str):
+    return next_buffer.status(owner)
+
+
+@app.delete("/api/playback/prefetch/{owner}")
+def prefetch_cancel(owner: str):
+    next_buffer.cancel(owner)
+    return {"ok": True}
 
 
 @app.api_route("/api/hls", methods=["GET", "HEAD"])

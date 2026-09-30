@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -182,3 +184,22 @@ class SettingsIn(BaseModel):
     theme: str | None = None
     lan_tv: bool | None = None
     in_kaohsiung: bool | None = None
+
+
+class PrefetchIn(BaseModel):
+    owner: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9:-]+$")
+    url: str = Field(max_length=5000)
+    ready: bool = False
+    height: int = Field(default=0, ge=0, le=4320)
+    retry: bool = False
+
+
+class OfflineIn(BaseModel):
+    source: str = Field(max_length=40)
+    video_id: str = Field(min_length=1, max_length=200)
+    episode: str = Field(default="", max_length=16)
+    height: Literal[0, 720] = 720
+
+
+class OfflineDeleteIn(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=200)

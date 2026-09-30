@@ -8,6 +8,7 @@ import { Favorites } from "./pages/Favorites";
 import { Home } from "./pages/Home";
 import { Search } from "./pages/Search";
 import { SettingsPage } from "./pages/Settings";
+import { OfflineLibrary } from "./components/Offline";
 import { Watch } from "./pages/Watch";
 import { api } from "./api";
 import { useSource } from "./source";
@@ -23,6 +24,7 @@ function appRoutes(prefix: string) {
       <Route path={`${p}/c/:kind/:slug`} element={<Browse />} />
       <Route path={`${p}/watch/:source/:id`} element={<Watch />} />
       <Route path={`${p}/watch/:id`} element={<Watch />} />
+      <Route path={`${p}/offline`} element={<OfflineLibrary />} />
       <Route path={`${p}/favorites`} element={<Favorites />} />
       {p ? null : <Route path="/settings" element={<SettingsPage />} />}
     </>

@@ -21,7 +21,8 @@ from .models import VideoDetail
 from .security import assert_hls_url, hls_allowed_hosts
 
 ROOT = Path(r'D:\AI工作區\離線影片')
-_queue = queue.Queue(maxsize=20)
+# Only user-selected metadata is queued; the single worker downloads serially.
+_queue = queue.Queue()
 _worker_lock = threading.Lock()
 _started = False
 
@@ -121,7 +122,7 @@ def status(key):
         handle = _claim(folder)
         if handle:
             _release(handle)
-            return {**item, 'phase': 'error', 'error': '下載已中斷，請手動重試'}
+            return {**item, 'phase': 'error', 'error': '下載已中斷，請手動繼續下載'}
     if record:
         return {**item, 'phase': 'error', 'error': '本地檔案遺失或不完整，請重新下載'}
     return item
@@ -194,7 +195,7 @@ def fetch_detail(source, video_id, episode=None):
     return overlay(detail)
 
 
-def enqueue(source, video_id, episode='', height=720):
+def enqueue(source, video_id, episode='', height=720, restart=False):
     global _started
     key = identity(source, video_id, episode)
     existing = status(key)
@@ -206,13 +207,22 @@ def enqueue(source, video_id, episode='', height=720):
         return status(key) or {'id': key, 'phase': 'queued'}
     item = dict(id=key, source=source, video_id=video_id, episode=episode, title=video_id,
                 episode_title=episode, height=height, phase='queued', progress=0, error='', created=time.time())
+    if existing:
+        item.update(title=existing.get('title', video_id), episode_title=existing.get('episode_title', episode),
+                    progress=0 if restart else existing.get('progress', 0))
     try:
+        if restart:
+            work = folder / 'parts'
+            if work.exists():
+                if work.resolve().parent != folder.resolve() or work.is_symlink():
+                    raise ValueError('無效的下載資料夾')
+                shutil.rmtree(work)
         (folder / 'cancel').unlink(missing_ok=True)
         _write(folder / 'status.json', item)
         _queue.put_nowait((item, handle))
     except Exception:
         _release(handle)
-        raise ValueError('下載佇列已滿，請稍後再加入')
+        raise ValueError('無法加入下載佇列，請確認離線資料夾可寫入')
     with _worker_lock:
         if not _started:
             _started = True
@@ -267,37 +277,99 @@ def _check(folder):
         raise ValueError('硬碟剩餘空間不足 512 MB，已停止下載')
 
 
-def _download(url, path, folder, limit=None):
+def _file_hash(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _download(url, path, folder, limit=None, *, resume_partial=False, progress=None):
     assert_hls_url(url)
     _check(folder)
-    cached = next_buffer.cached(url)
-    if cached is not None:
-        if limit and len(cached) > limit:
-            raise ValueError('影片分段過大，已停止下載')
-        path.write_bytes(cached)
+    if path.is_symlink() or path.resolve().parent != path.parent.resolve():
+        raise ValueError('無效的下載檔案路徑')
+    metadata = path.with_name(path.name + '.download.json')
+    previous = _read(metadata) or {}
+    size = path.stat().st_size if path.exists() else 0
+    if (previous.get('complete') and previous.get('url') == url and size > 0
+            and size == previous.get('size') and _file_hash(path) == previous.get('sha256')):
+        if progress: progress(100)
         return
+    offset = 0
+    validator = previous.get('etag', '')
+    if resume_partial and size:
+        # If-Range requires a strong validator. Never append an unknown/new file.
+        if (previous.get('url') != url or not isinstance(validator, str) or not validator.startswith('"') or not validator.endswith('"')
+                or not isinstance(previous.get('total'), int) or size > previous['total']
+                or (previous.get('size') == size and previous.get('sha256') and _file_hash(path) != previous['sha256'])):
+            raise ValueError('此片源無法安全續傳，請選「重新下載」')
+        offset = size
+        if offset == previous['total']:
+            _write(metadata, {**previous, 'complete': True, 'size': size, 'sha256': _file_hash(path)})
+            if progress: progress(100)
+            return
+    if not offset:
+        cached = next_buffer.cached(url)
+        if cached is not None:
+            if limit and len(cached) > limit:
+                raise ValueError('影片分段過大，已停止下載')
+            path.write_bytes(cached)
+            _write(metadata, dict(url=url, complete=True, size=len(cached), sha256=hashlib.sha256(cached).hexdigest()))
+            if progress: progress(100)
+            return
     referer, impersonate = hls_proxy._media_context(url)
     response = http_client.fetch_bytes(url, referer=referer, allowed_hosts=hls_allowed_hosts(url),
                                       timeout=20, stream=True, impersonate=impersonate,
+                                      range_header=f'bytes={offset}-' if offset else None,
+                                      if_range=validator if offset else None,
                                       redirect_validator=hls_proxy._playlist_media_url)
-    size = 0
+    record = None
     try:
-        if response.status_code != 200:
-            raise ValueError('下載回應不完整，請重試')
-        with path.open('wb') as out:
+        expected = response.headers.get('content-length', '')
+        etag = response.headers.get('etag', '')
+        if offset:
+            match = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+)', response.headers.get('content-range', ''))
+            if (response.status_code != 206 or not match or int(match[1]) != offset
+                    or int(match[3]) != previous['total'] or etag != validator
+                    or int(match[2]) < offset or int(match[2]) >= int(match[3])
+                    or (expected and (not expected.isdigit() or int(expected) != int(match[2]) - offset + 1))):
+                raise ValueError('片源已變更或不支援續傳，請選「重新下載」')
+            total, expected_bytes = int(match[3]), int(match[2]) - offset + 1
+        else:
+            if response.status_code != 200:
+                raise ValueError('下載回應不完整，請重試')
+            total = int(expected) if expected.isdigit() else None
+            expected_bytes = total
+        if limit and total and total > limit:
+            raise ValueError('影片分段過大，已停止下載')
+        record = dict(url=url, etag=etag, total=total, complete=False)
+        size = offset
+        with path.open('ab' if offset else 'wb') as out:
+            _write(metadata, record)
+            if progress and total: progress(round(offset * 100 / total, 1))
             for chunk in response.iter_content(chunk_size=256 * 1024):
                 _check(folder)
-                if not size and chunk.lstrip().lower().startswith((b'<!doctype', b'<html')):
+                if not chunk: continue
+                if size == offset and chunk.lstrip().lower().startswith((b'<!doctype', b'<html')):
                     raise ValueError('來源回傳錯誤頁')
-                size += len(chunk)
-                if limit and size > limit:
+                if limit and out.tell() + len(chunk) > limit:
                     raise ValueError('影片分段過大，已停止下載')
+                if total and out.tell() + len(chunk) > total:
+                    raise ValueError('影片下載長度與來源不符')
                 out.write(chunk)
-        expected = response.headers.get('content-length')
-        if not size or (expected and expected.isdigit() and size != int(expected)):
-            raise ValueError('影片下載不完整，請重試')
+                size = out.tell()
+                if progress and total: progress(round(size * 100 / total, 1))
+        size = path.stat().st_size
+        if not size or (expected_bytes is not None and size - offset != expected_bytes) or (total and size != total):
+            raise ValueError('影片下載不完整，請繼續下載')
+        record['complete'] = True
     finally:
         http_client.close_response(response)
+        if record is not None and path.exists():
+            record.update(size=path.stat().st_size, sha256=_file_hash(path))
+            _write(metadata, record)
 
 
 def _hls(url, work, folder, height, progress):
@@ -349,6 +421,11 @@ def _hls(url, work, folder, height, progress):
         lines.append(line)
     if not resources or not duration:
         raise ValueError('沒有可下載的影片分段')
+    plan = dict(lines=lines, resources=[[remote, filename] for remote, filename in resources.items()])
+    previous = _read(work / 'plan.json')
+    if previous and previous != plan:
+        raise ValueError('播放清單已變更，無法安全續傳，請選「重新下載」')
+    _write(work / 'plan.json', plan)
     for index, (remote, filename) in enumerate(resources.items()):
         _download(remote, work / filename, folder, 256 * 1024 * 1024)
         progress(round((index + 1) * 100 / len(resources), 1))
@@ -400,7 +477,7 @@ def _run(item):
         _write(folder / 'status.json', item)
     try:
         _check(folder)
-        save(phase='downloading', progress=0)
+        save(phase='downloading', progress=item.get('progress', 0))
         detail = fetch_detail(item['source'], item['video_id'], item['episode'] or None)
         selected = next((e for e in detail.episodes if e.id == item['episode']), None)
         if detail.episodes and not selected:
@@ -412,9 +489,11 @@ def _run(item):
             raise ValueError('此集無可下載的線上片源')
         url = assert_hls_url(urls[0])
         work.mkdir(exist_ok=True)
+        if work.resolve().parent != folder.resolve() or work.is_symlink():
+            raise ValueError('無效的下載資料夾')
         if urlparse(url).path.lower().endswith('.mp4'):
             input_path, duration = work / 'source.mp4', 0
-            _download(url, input_path, folder)
+            _download(url, input_path, folder, resume_partial=True, progress=lambda value: save(progress=value))
         else:
             input_path, duration = _hls(url, work, folder, item['height'], lambda value: save(progress=value))
         save(phase='preparing', progress=100)
@@ -425,12 +504,12 @@ def _run(item):
         _write(folder / 'complete.json', dict(item=item, detail=detail.model_dump(), size=(folder / 'video.mp4').stat().st_size))
         save(phase='complete', error='')
     except Cancelled:
-        save(phase='cancelled', error='已取消下載')
+        save(phase='cancelled', error='已停止下載；已下載部分保留，可繼續下載')
     except Exception as exc:
         save(phase='error', error=str(exc) or '下載失敗，請重試')
     finally:
-        # Only task-owned temporary files in the verified library folder.
-        if work.exists() and work.resolve().parent == folder.resolve() and not work.is_symlink():
+        # Interrupted downloads keep validated source parts for manual resume.
+        if item.get('phase') == 'complete' and work.exists() and work.resolve().parent == folder.resolve() and not work.is_symlink():
             shutil.rmtree(work)
         (folder / 'video.part.mp4').unlink(missing_ok=True)
 

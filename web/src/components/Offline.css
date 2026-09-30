@@ -1,0 +1,46 @@
+.offline-download-dialog {
+  width: min(640px, calc(100% - 24px));
+  max-height: min(760px, 90dvh);
+  padding: 20px;
+  overflow: hidden;
+  color: var(--text);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.offline-download-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.offline-download-dialog::backdrop { background: rgba(0, 0, 0, .65); }
+.offline-download-dialog p, .offline-download-dialog h2 { margin: 0; }
+.offline-download-header, .offline-download-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.offline-download-header { justify-content: space-between; }
+.offline-download-header h2 { font-size: 20px; }
+.offline-download-episodes {
+  min-height: 80px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.offline-download-episode {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 4px 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+.offline-download-episode:last-child { border-bottom: 0; }
+.offline-download-episode small { grid-column: 2; overflow-wrap: anywhere; }
+.offline-download-episode input { width: 18px; height: 18px; margin: 0; }
+.offline-download-footer { padding-top: 8px; border-top: 1px solid var(--line); }

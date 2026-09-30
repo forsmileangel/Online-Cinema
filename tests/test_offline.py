@@ -18,7 +18,7 @@ class OfflineTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        for obj, name, value in [(offline, 'ROOT', Path(tmp.name)), (offline, '_queue', queue.Queue(20)),
+        for obj, name, value in [(offline, 'ROOT', Path(tmp.name)), (offline, '_queue', queue.Queue(offline._queue.maxsize)),
                                  (offline, '_started', True), (security, '_extra_media_hosts', {}),
                                  (security, '_extra_media_sources', {})]:
             p = patch.object(obj, name, value); p.start(); self.addCleanup(p.stop)
@@ -64,6 +64,21 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(offline.status(item['id'])['phase'], 'queued')
         offline._release(handle)
         self.assertEqual(offline.status(item['id'])['phase'], 'error')
+
+    def test_multi_episode_selection_can_queue_more_than_twenty_without_origin_requests(self):
+        try:
+            with patch.object(offline, 'fetch_detail') as fetch:
+                jobs = [offline.enqueue('gimy', 'test', str(ep), 720) for ep in range(1, 26)]
+                duplicate = offline.enqueue('gimy', 'test', '1', 720)
+            fetch.assert_not_called()
+            self.assertEqual(len(jobs), 25)
+            self.assertEqual(offline._queue.qsize(), 25)
+            self.assertEqual(duplicate['id'], jobs[0]['id'])
+            self.assertEqual(offline.status(jobs[-1]['id'])['phase'], 'queued')
+        finally:
+            while not offline._queue.empty():
+                _, handle = offline._queue.get_nowait()
+                offline._release(handle)
 
     def test_cancelled_queue_never_fetches_source(self):
         item = offline.enqueue('gimy', 'test', '2')
@@ -175,6 +190,106 @@ class OfflineTests(unittest.TestCase):
             self.assertEqual(offline.delete([job['id']], {'gimy'})['deleted'], [])
         finally: offline._release(handle)
         self.assertEqual(offline.delete([second], {'dramaq'})['deleted'], [])
+
+    def test_hls_resume_reuses_verified_segments_and_rejects_changed_playlist(self):
+        work = offline.ROOT / 'parts'; work.mkdir()
+        leaf = '#EXTM3U\n#EXTINF:10,\na.ts\n#EXTINF:10,\nb.ts\n#EXT-X-ENDLIST\n'
+        def response(data):
+            return Mock(status_code=200, headers={'content-length': str(len(data))}, iter_content=lambda **kw: iter([data]))
+        with patch.object(hls_proxy, '_read_playlist', return_value=(leaf, URL)), patch.object(offline.http_client, 'fetch_bytes', side_effect=[response(b'first'), RuntimeError('interrupted')]):
+            with self.assertRaisesRegex(RuntimeError, 'interrupted'):
+                offline._hls(URL, work, offline.ROOT, 720, Mock())
+        self.assertEqual((work / '000000.ts').read_bytes(), b'first')
+        progress = Mock()
+        with patch.object(hls_proxy, '_read_playlist', return_value=(leaf, URL)), patch.object(offline.http_client, 'fetch_bytes', return_value=response(b'second')) as fetch:
+            _, duration = offline._hls(URL, work, offline.ROOT, 720, progress)
+        self.assertEqual(duration, 20)
+        self.assertEqual(fetch.call_count, 1)
+        self.assertTrue(fetch.call_args.args[0].endswith('/b.ts'))
+        progress.assert_called_with(100)
+        with patch.object(hls_proxy, '_read_playlist', return_value=(leaf.replace('a.ts', 'new.ts'), URL)), patch.object(offline.http_client, 'fetch_bytes') as fetch:
+            with self.assertRaisesRegex(ValueError, '重新下載'):
+                offline._hls(URL, work, offline.ROOT, 720, Mock())
+            fetch.assert_not_called()
+        self.assertEqual((work / '000000.ts').read_bytes(), b'first')
+        # A damaged local segment is fetched again, rather than silently reused.
+        (work / '000000.ts').write_bytes(b'xxxxx')
+        with patch.object(hls_proxy, '_read_playlist', return_value=(leaf, URL)), patch.object(offline.http_client, 'fetch_bytes', return_value=response(b'first')) as fetch:
+            offline._hls(URL, work, offline.ROOT, 720, Mock())
+        self.assertEqual(fetch.call_count, 1)
+        self.assertTrue(fetch.call_args.args[0].endswith('/a.ts'))
+
+    def test_mp4_resume_sends_range_and_if_range_and_publishes_only_complete_input(self):
+        path = offline.ROOT / 'source.mp4'
+        url = 'https://offline.example/source.mp4'
+        def interrupted(**kw):
+            yield b'01234'
+            raise RuntimeError('connection lost')
+        first = Mock(status_code=200, headers={'content-length': '10', 'etag': '"v1"'}, iter_content=interrupted)
+        with patch.object(offline.http_client, 'fetch_bytes', return_value=first), self.assertRaises(RuntimeError):
+            offline._download(url, path, offline.ROOT, resume_partial=True)
+        self.assertEqual(path.read_bytes(), b'01234')
+        self.assertFalse(offline._read(path.with_name(path.name + '.download.json'))['complete'])
+        response = Mock(url=url, status_code=206, headers={'content-length': '5', 'content-range': 'bytes 5-9/10', 'etag': '"v1"'}, iter_content=lambda **kw: iter([b'56789']))
+        session = Mock(); session.request.return_value = response
+        progress = Mock()
+        with patch.object(offline.http_client, 'media_session', return_value=session):
+            offline._download(url, path, offline.ROOT, resume_partial=True, progress=progress)
+        headers = session.request.call_args.kwargs['headers']
+        self.assertEqual(headers['Range'], 'bytes=5-')
+        self.assertEqual(headers['If-Range'], '"v1"')
+        self.assertEqual(path.read_bytes(), b'0123456789')
+        self.assertTrue(offline._read(path.with_name(path.name + '.download.json'))['complete'])
+        progress.assert_called_with(100)
+        with patch.object(offline.http_client, 'fetch_bytes') as fetch:
+            offline._download(url, path, offline.ROOT, resume_partial=True)
+            fetch.assert_not_called()
+
+    def test_mp4_unsafe_resume_keeps_partial_file_and_requires_explicit_restart(self):
+        path = offline.ROOT / 'source.mp4'
+        path.write_bytes(b'01234')
+        metadata = path.with_name(path.name + '.download.json')
+        record = dict(url=URL, etag='"v1"', total=10, complete=False, size=5, sha256=offline._file_hash(path))
+        offline._write(metadata, record)
+        for response in [Mock(status_code=200, headers={'content-length': '10', 'etag': '"v2"'}),
+                         Mock(status_code=206, headers={'content-range': 'bytes 4-9/10', 'etag': '"v1"'}),
+                         Mock(status_code=206, headers={'content-range': 'bytes 5-9/10', 'etag': '"v2"'})]:
+            with patch.object(offline.http_client, 'fetch_bytes', return_value=response), self.assertRaisesRegex(ValueError, '重新下載'):
+                offline._download(URL, path, offline.ROOT, resume_partial=True)
+            self.assertEqual(path.read_bytes(), b'01234')
+        offline._write(metadata, {**record, 'url': URL + '?old=1'})
+        with patch.object(offline.http_client, 'fetch_bytes') as fetch, self.assertRaisesRegex(ValueError, '重新下載'):
+            offline._download(URL, path, offline.ROOT, resume_partial=True)
+        fetch.assert_not_called()
+        offline._write(metadata, {**record, 'etag': ''})
+        with patch.object(offline.http_client, 'fetch_bytes') as fetch, self.assertRaisesRegex(ValueError, '重新下載'):
+            offline._download(URL, path, offline.ROOT, resume_partial=True)
+        fetch.assert_not_called()
+
+    def test_cancelled_download_keeps_source_parts_until_explicit_restart(self):
+        job = offline.enqueue('gimy', 'test', '1')
+        _, handle = offline._queue.get()
+        folder = offline._folder(job['id'])
+        def interrupted(url, work, folder, height, progress):
+            (work / '000000.ts').write_bytes(b'part')
+            progress(50)
+            raise offline.Cancelled()
+        try:
+            with patch.object(offline, 'fetch_detail', return_value=self.detail), patch.object(offline, '_hls', side_effect=interrupted):
+                offline._run(job)
+            self.assertEqual(offline.status(job['id'])['phase'], 'cancelled')
+            self.assertTrue((folder / 'parts/000000.ts').exists())
+        finally: offline._release(handle)
+        retry = offline.enqueue('gimy', 'test', '1')
+        self.assertEqual(retry['progress'], 50)
+        self.assertTrue((folder / 'parts/000000.ts').exists())
+        _, handle = offline._queue.get(); offline._release(handle)
+        restarted = offline.enqueue('gimy', 'test', '1', restart=True)
+        try:
+            self.assertEqual(restarted['progress'], 0)
+            self.assertFalse((folder / 'parts').exists())
+        finally:
+            _, handle = offline._queue.get(); offline._release(handle)
 
     def test_windows_atomic_replace_retries_brief_file_locks(self):
         original = Path.replace

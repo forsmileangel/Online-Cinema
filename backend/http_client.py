@@ -113,6 +113,7 @@ def fetch_bytes(
     impersonate: str | None = None,
     method: str = "GET",
     range_header: str | None = None,
+    if_range: str | None = None,
     redirect_validator: Callable[[str, str], str] | None = None,
     interface: str | None = None,
 ) -> Any:
@@ -124,6 +125,8 @@ def fetch_bytes(
     sess = media_session(impersonate, interface)
     if range_header:
         headers["Range"] = range_header
+        if if_range:
+            headers["If-Range"] = if_range
     deadline = time.monotonic() + timeout
     for redirect in range(4):
         remaining = deadline - time.monotonic()

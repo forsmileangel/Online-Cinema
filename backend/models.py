@@ -199,6 +199,7 @@ class OfflineIn(BaseModel):
     video_id: str = Field(min_length=1, max_length=200)
     episode: str = Field(default="", max_length=16)
     height: Literal[0, 720] = 720
+    restart: bool = False
 
 
 class OfflineDeleteIn(BaseModel):

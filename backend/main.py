@@ -143,7 +143,7 @@ def offline_download(body: OfflineIn):
     if body.source not in catalog.SOURCES:
         raise HTTPException(400, "不支援的來源")
     try:
-        return offline.enqueue(body.source, safe_video_id(body.video_id), body.episode, body.height)
+        return offline.enqueue(body.source, safe_video_id(body.video_id), body.episode, body.height, restart=body.restart)
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 

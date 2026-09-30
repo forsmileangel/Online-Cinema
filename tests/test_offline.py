@@ -19,7 +19,7 @@ class OfflineTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         for obj, name, value in [(offline, 'ROOT', Path(tmp.name)), (offline, '_queue', queue.Queue(offline._queue.maxsize)),
-                                 (offline, '_started', True), (offline, '_maintenance_started', True), (offline, '_playback_parts', {}), (security, '_extra_media_hosts', {}),
+                                 (offline, '_started', True), (offline, '_maintenance_started', True), (offline, '_cleanup_check_at', 0), (offline, '_playback_parts', {}), (security, '_extra_media_hosts', {}),
                                  (security, '_extra_media_sources', {})]:
             p = patch.object(obj, name, value); p.start(); self.addCleanup(p.stop)
         p = patch.object(security, '_assert_not_private'); p.start(); self.addCleanup(p.stop)
@@ -110,7 +110,7 @@ class OfflineTests(unittest.TestCase):
             response = Mock(status_code=200, headers={'content-length': length}, iter_content=lambda **kw: iter([data]))
             with patch.object(offline.http_client, 'fetch_bytes', return_value=response), patch.object(offline, '_wait_retry'), self.assertRaises(ValueError):
                 offline._download(URL, offline.ROOT / 'part', offline.ROOT)
-        with patch.object(offline.http_client, 'fetch_bytes', side_effect=security.SiteBusy('source', 429, 30)) as fetch, self.assertRaises(security.SiteBusy):
+        with patch.object(offline.http_client, 'fetch_bytes', side_effect=security.SiteBusy('source', 429, 30)) as fetch, self.assertRaises(offline.RetryLater):
             offline._download(URL, offline.ROOT / 'part', offline.ROOT)
         self.assertEqual(fetch.call_count, 1)
         with self.assertRaises(security.UnsafeURL):
@@ -133,7 +133,7 @@ class OfflineTests(unittest.TestCase):
                                    query_string=b'', server=('127.0.0.1', 6970), client=(client, 12345),
                                    headers=[(b'range', range_header.encode())] if range_header else [], asgi={'spec_version': '2.4'}))
             async def run():
-                async def endpoint(req): return main.offline_media(key)
+                async def endpoint(req): return main.offline_media(key, req)
                 async def cors(req): return await main.media_cors(req, endpoint)
                 response = await main.AccessGuard(main.app).dispatch(request, cors)
                 messages = []
@@ -154,7 +154,7 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(serve(range_header='bytes=30-')[0]['status'], 416)
         self.assertEqual(serve(client='192.168.1.22', path='/api/offline')[0]['status'], 401)
         self.assertEqual(serve(client='8.8.8.8')[0]['status'], 403)
-        with self.assertRaises(HTTPException): main.offline_media('not-valid')
+        with self.assertRaises(HTTPException): main.offline_media('not-valid', Request({'type': 'http', 'method': 'GET'}))
         with self.assertRaises(ValueError): offline.media_path('../outside')
         self.assertIsNone(offline.media_key('https://other' + offline.media_url(key)))
 

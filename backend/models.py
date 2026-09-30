@@ -204,3 +204,7 @@ class OfflineIn(BaseModel):
 
 class OfflineDeleteIn(BaseModel):
     ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class OfflineCleanupIn(BaseModel):
+    enabled: bool

@@ -26,6 +26,7 @@ _queue = queue.Queue()
 _worker_lock = threading.Lock()
 _started = False
 _maintenance_started = False
+_cleanup_check_at = 0.0
 _lifecycle_lock = threading.RLock()
 _playback_parts = {}
 
@@ -287,6 +288,8 @@ def playback(source, video_id, episode=''):
     """Actual playback only: metadata resolution/prefetch must not call this."""
     key = identity(source, video_id, episode)
     item = status(key)
+    if item and item['phase'] == 'complete':
+        touch_played(key)
     if not item or item['phase'] in ('complete', 'deleting', 'delete_error'):
         return
     cancel(key, '已開始播放此集，整集下載已取消；已下載部分保留，可繼續下載')
@@ -346,6 +349,12 @@ def _finish_delete(key):
         marker = _read(folder / 'delete.json')
         if not marker:
             return True  # Another app already finished while we acquired the lock.
+        if 'auto_cutoff' in marker:
+            record = _read(folder / 'complete.json')
+            policy = _read(ROOT / 'retention.json') or {}
+            if not policy.get('enabled') or not record or _last_played(folder, record, marker['auto_baseline']) >= marker['auto_cutoff']:
+                (folder / 'delete.json').unlink(missing_ok=True)
+                return True  # Recent playback or disabling cleanup cancels deletion.
         work = folder / 'parts'
         if work.resolve().parent != folder.resolve() or work.is_symlink():
             raise ValueError('無效的下載資料夾')
@@ -355,7 +364,7 @@ def _finish_delete(key):
             (folder / name).unlink(missing_ok=True)
         if work.exists():
             shutil.rmtree(work)
-        for name in ('complete.json', 'status.json', 'complete.tmp', 'status.tmp', 'cancel'):
+        for name in ('complete.json', 'status.json', 'complete.tmp', 'status.tmp', 'cancel', 'last-played'):
             (folder / name).unlink(missing_ok=True)
         (folder / 'delete.json').unlink(missing_ok=True)
         return True
@@ -408,6 +417,7 @@ def _maintenance_once():
                     except (OSError, ValueError):
                         pass  # Persistent, visible error; explicit retry required.
     _resume_pending()
+    _cleanup_expired()
 
 
 def _resume_pending():
@@ -451,6 +461,92 @@ def _resume_pending():
         finally:
             if not queued:
                 _release(handle)
+
+
+def cleanup_policy(enabled=None):
+    defaults = dict(enabled=True, days=14, initialized_at=time.time(), last_run=0, deleted=0, errors=0)
+    handle = _claim(ROOT)
+    if handle is None:
+        if enabled is not None:
+            raise ValueError('清理設定正在更新，請稍後重試')
+        return _read(ROOT / 'retention.json') or defaults
+    try:
+        policy = _read(ROOT / 'retention.json')
+        changed = policy is None or enabled is not None
+        policy = policy or defaults
+        if enabled is not None:
+            policy.update(enabled=bool(enabled), last_run=0)
+        if changed:
+            _write(ROOT / 'retention.json', policy)
+        return policy
+    finally:
+        _release(handle)
+
+
+def touch_played(key):
+    folder = _folder(key)
+    handle = _claim(folder)
+    if handle is None:
+        return
+    try:
+        if not _read(folder / 'complete.json'):
+            return
+        marker = folder / 'last-played'
+        if marker.is_symlink():
+            raise ValueError('無效的觀看紀錄路徑')
+        marker.touch()
+    finally:
+        _release(handle)
+
+
+def _last_played(folder, record, baseline):
+    # Legacy files have no reliable episode-level history: grant a fresh 14 days.
+    last = record.get('completed_at') or baseline
+    marker = folder / 'last-played'
+    if marker.is_symlink():
+        return time.time()  # Do not follow or delete through a replaced marker.
+    if marker.exists():
+        last = max(last, marker.stat().st_mtime)
+    return last
+
+
+def _cleanup_expired():
+    global _cleanup_check_at
+    if time.monotonic() < _cleanup_check_at:
+        return
+    _cleanup_check_at = time.monotonic() + 60
+    cleanup_policy()  # Initialize the shared policy before inspecting legacy files.
+    handle = _claim(ROOT)
+    if handle is None:
+        return
+    try:
+        policy = _read(ROOT / 'retention.json')
+        now = time.time()
+        if not policy or not policy['enabled'] or now - policy['last_run'] < 3600:
+            return
+        cutoff = now - 14 * 86400
+        deleted, errors = 0, 0
+        for candidate in ROOT.iterdir():
+            if not re.fullmatch(r'[0-9a-f]{64}', candidate.name):
+                continue
+            try:
+                folder = _folder(candidate.name)
+                record = _read(folder / 'complete.json')
+                if (not record or (folder / 'delete.json').exists()
+                        or _last_played(folder, record, policy['initialized_at']) >= cutoff):
+                    continue
+                item = status(candidate.name)
+                if not item or item['phase'] != 'complete':
+                    continue
+                _write(folder / 'delete.json', dict(item=item, error='', auto_cutoff=cutoff,
+                                                   auto_baseline=policy['initialized_at']))
+                if _finish_delete(candidate.name) and status(candidate.name) is None:
+                    deleted += 1
+            except (OSError, ValueError):
+                errors += 1
+        _write(ROOT / 'retention.json', {**policy, 'last_run': now, 'deleted': deleted, 'errors': errors})
+    finally:
+        _release(handle)
 
 
 def _start_maintenance():
@@ -703,9 +799,10 @@ def _hls(url, work, folder, height, progress, on_retry=None):
             duration += seconds
     if not duration or '#EXT-X-ENDLIST' not in lines:
         raise ValueError('無效的已保存播放清單')
-    for remote, _ in resources:
-        assert_hls_url(remote)
     completed = {filename for remote, filename in resources if _completed(work / filename, remote)}
+    for remote, filename in resources:
+        if filename not in completed:
+            assert_hls_url(remote)
     progress(round(len(completed) * 100 / len(resources), 1))
     for remote, filename in resources:
         if filename in completed: continue
@@ -808,6 +905,15 @@ def _convert(input_path, output, folder, height, expected_duration):
                 process.wait(timeout=10)
 
 
+def _saved_inputs_complete(work, url):
+    if urlparse(url).path.lower().endswith('.mp4'):
+        return _completed(work / 'source.mp4', url)
+    plan = _read(work / 'plan.json') or {}
+    resources = plan.get('resources', [])
+    return bool(resources) and all(re.fullmatch(r'\d{6}\.(ts|key|mp4)', name)
+                                   and _completed(work / name, remote) for remote, name in resources)
+
+
 def _run(item):
     folder = _folder(item['id'])
     work = folder / 'parts'
@@ -840,18 +946,22 @@ def _run(item):
         urls = parse_qs(parsed.query).get('u', [])
         if parsed.scheme or parsed.netloc or parsed.path != '/api/hls' or len(urls) != 1:
             raise ValueError('此集無可下載的線上片源')
-        try:
-            url = assert_hls_url(urls[0])
-        except UnsafeURL:
-            if not saved: raise
-            # Refresh authorization through the source parser; do not grant a
-            # new CDN merely because its hostname exists in a local file.
-            _retry(lambda: fetch_detail(item['source'], item['video_id'], item['episode'] or None), folder, retrying)
-            url = assert_hls_url(urls[0])
+        complete_input = bool(saved) and _saved_inputs_complete(work, urls[0])
+        url = urls[0]
+        if not complete_input:
+            try:
+                url = assert_hls_url(url)
+            except UnsafeURL:
+                if not saved: raise
+                # Refresh authorization through the source parser; do not grant
+                # a new CDN merely because it exists in a local file.
+                _retry(lambda: fetch_detail(item['source'], item['video_id'], item['episode'] or None), folder, retrying)
+                url = assert_hls_url(url)
         if not saved: _write(work / 'source.json', {'detail': detail.model_dump()})
         if urlparse(url).path.lower().endswith('.mp4'):
             input_path, duration = work / 'source.mp4', 0
-            _download(url, input_path, folder, resume_partial=True, progress=progress, on_retry=retrying)
+            if not complete_input:
+                _download(url, input_path, folder, resume_partial=True, progress=progress, on_retry=retrying)
         else:
             input_path, duration = _hls(url, work, folder, item['height'], progress, on_retry=retrying)
         save(phase='preparing', progress=100)
@@ -859,7 +969,7 @@ def _run(item):
         _convert(input_path, temporary, folder, item['height'], duration)
         _check(folder)
         temporary.replace(folder / 'video.mp4')
-        _write(folder / 'complete.json', dict(item=item, detail=detail.model_dump(), size=(folder / 'video.mp4').stat().st_size))
+        _write(folder / 'complete.json', dict(item=item, detail=detail.model_dump(), size=(folder / 'video.mp4').stat().st_size, completed_at=time.time()))
         save(phase='complete', error='')
     except Cancelled:
         save(phase='cancelled', error=_cancel_message(folder))

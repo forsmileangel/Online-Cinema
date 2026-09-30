@@ -5,6 +5,7 @@ import type { Episode } from "../types";
 import "./Offline.css";
 
 type Download = { id: string; source: string; video_id: string; episode: string; title: string; episode_title: string; height: number; phase: string; progress: number; error: string; url?: string; size?: number; retry_attempt?: number; retry_at?: number };
+type Cleanup = { enabled: boolean; days: number; last_run: number; deleted: number; errors: number };
 const active = (item: Download) => ["queued", "downloading", "retrying", "preparing", "cancelling", "deleting"].includes(item.phase);
 async function request(url: string, body?: object, method = "GET") {
   const response = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
@@ -17,6 +18,7 @@ export function notifyOfflinePlayback(source: string, video_id: string, episode:
 }
 function useDownloads(source?: string, id?: string) {
   const [items, setItems] = useState<Download[]>([]);
+  const [cleanup, setCleanup] = useState<Cleanup | null>(null);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   useEffect(() => {
@@ -26,7 +28,7 @@ function useDownloads(source?: string, id?: string) {
       busy = true;
       try {
         const result = await request(`/api/offline?${new URLSearchParams({ ...(source ? { source } : {}), ...(id ? { video_id: id } : {}) })}`);
-        if (alive) { setItems(result.items); setError(""); }
+        if (alive) { setItems(result.items); setCleanup(result.cleanup || null); setError(""); }
       } catch (err) { if (alive) setError(err instanceof Error ? err.message : "無法取得下載狀態"); }
       finally { busy = false; }
     };
@@ -34,7 +36,7 @@ function useDownloads(source?: string, id?: string) {
     const timer = window.setInterval(() => void refresh(), 3000);
     return () => { alive = false; window.clearInterval(timer); };
   }, [source, id, revision]);
-  return { items, error, refresh: () => setRevision(n => n + 1) };
+  return { items, cleanup, setCleanup, error, refresh: () => setRevision(n => n + 1) };
 }
 function label(item: Download) {
   if (item.phase === "deleting") return "正在停止下載並刪除，完成後會自動移除";
@@ -150,13 +152,26 @@ export function OfflinePanel({ source, id, episodes, current, local, onReady }: 
 }
 
 export function OfflineLibrary() {
-  const { items, error, refresh } = useDownloads();
+  const { items, cleanup, setCleanup, error, refresh } = useDownloads();
+  const [cleanupBusy, setCleanupBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [anchor, setAnchor] = useState("");
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  async function toggleCleanup(enabled: boolean) {
+    if (!cleanup || cleanupBusy) return;
+    const previous = cleanup;
+    setCleanup({ ...cleanup, enabled });
+    setCleanupBusy(true); setMessage("");
+    try {
+      setCleanup(await request("/api/offline/cleanup", { enabled }, "POST") as Cleanup);
+      setMessage(enabled ? "已開啟自動清理；超過 14 天未觀看的完整影片會在背景清除。" : "已關閉自動清理，兩站均會保留離線影片。");
+      refresh();
+    } catch (err) { setCleanup(previous); setMessage(err instanceof Error ? err.message : "無法更新清理設定"); }
+    finally { setCleanupBusy(false); }
+  }
   const visible = items.filter(item => `${item.title} ${item.episode_title}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   const groups = new Map<string, Download[]>();
   for (const item of visible) {
@@ -199,6 +214,12 @@ export function OfflineLibrary() {
   }
   return <div><h1>離線影片</h1><p className="muted">儲存在 D:\AI工作區\離線影片。網頁與投放優先播放完整的本地檔案；電腦及背景服務需要保持開啟。</p>
     <p className="muted">自動預載是有期限的暫存；此處管理手動下載的整集影片。支援依劇名全選，以及按住 Shift 連續勾選。</p>
+    <section aria-label="離線影片自動清理" style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12, marginBottom: 16 }}>
+      <label className="offline-selection"><input type="checkbox" checked={cleanup?.enabled ?? false} disabled={!cleanup || cleanupBusy} onChange={e => void toggleCleanup(e.target.checked)} /> 自動清除超過 14 天未觀看的影片</label>
+      <p className="muted">兩站共用此設定。從最後觀看時間計算；從未觀看則從下載完成日計算。下載中與未完成的檔案不會清除。</p>
+      <p className="muted">舊影片沒有觀看紀錄時，從功能啟用時保留 14 天。背景每小時檢查一次，清除後需重新下載。</p>
+      {cleanup?.last_run ? <p className="muted">上次檢查：{new Date(cleanup.last_run * 1000).toLocaleString()} · 已清除 {cleanup.deleted} 集{cleanup.errors ? ` · ${cleanup.errors} 項未完成清理，檔案仍保留` : ""}</p> : null}
+    </section>
     <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", position: "sticky", top: 0, background: "#17171d", padding: 12, zIndex: 2 }}>
       <input className="field" aria-label="搜尋離線影片" disabled={busy} placeholder="搜尋劇名、集數" value={query} onChange={e => { setQuery(e.target.value); setConfirm(false); }} />
       <label className="offline-selection"><input type="checkbox" aria-label="全選搜尋結果" disabled={busy} checked={visible.length > 0 && visible.every(item => selected.has(item.id))} onChange={e => select(visible.map(item => item.id), e.target.checked)} /> 全選搜尋結果</label>

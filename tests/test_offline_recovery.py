@@ -130,6 +130,28 @@ class OfflineRecoveryTests(unittest.TestCase):
             offline._download(URL, path, offline.ROOT, resume_partial=True)
         self.assertTrue(offline._read(metadata)['complete'])
 
+    def test_fully_saved_inputs_finish_after_restart_without_cdn_or_origin(self):
+        for episode, kind in (('1', 'hls'), ('2', 'mp4')):
+            job = offline.enqueue('gimy', 'test', episode)
+            item, handle = offline._queue.get_nowait()
+            folder = offline._folder(item['id']); work = folder / 'parts'; work.mkdir()
+            detail = self.detail.model_copy(deep=True)
+            url = URL if kind == 'hls' else URL.replace('index.m3u8', 'source.mp4')
+            detail.episodes[int(episode) - 1].playlist = '/api/hls?u=' + url
+            offline._write(work / 'source.json', {'detail': detail.model_dump()})
+            filename = '000000.ts' if kind == 'hls' else 'source.mp4'
+            path = work / filename; path.write_bytes(b'complete local input')
+            offline._write(path.with_name(path.name + '.download.json'), dict(url=url, complete=True, size=path.stat().st_size, sha256=offline._file_hash(path)))
+            if kind == 'hls':
+                offline._write(work / 'plan.json', dict(resources=[[url, filename]], lines=['#EXTM3U', '#EXTINF:10,', filename, '#EXT-X-ENDLIST']))
+            def convert(input_path, output, *args): output.write_bytes(b'complete mp4')
+            try:
+                with patch.object(security, '_extra_media_hosts', {}), patch.object(offline, 'fetch_detail', side_effect=AssertionError('origin must not be contacted')), patch.object(offline.http_client, 'fetch_bytes', side_effect=AssertionError('no media download')), patch.object(offline, '_convert', side_effect=convert):
+                    offline._run(item)
+                self.assertEqual(offline.status(job['id'])['phase'], 'complete', item.get('error'))
+            finally:
+                offline._release(handle); offline._queue.task_done()
+
 
 if __name__ == '__main__':
     unittest.main()

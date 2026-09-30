@@ -28,6 +28,7 @@ from .models import (
     PrefetchIn,
     OfflineIn,
     OfflineDeleteIn,
+    OfflineCleanupIn,
     HistoryIn,
     HomePayload,
     HomeRow,
@@ -136,7 +137,7 @@ def _err(exc: Exception, status: int = 400) -> HTTPException:
 
 @app.get("/api/offline")
 def offline_list(source: str | None = None, video_id: str | None = None):
-    return {"directory": str(offline.ROOT), "items": offline.listing(catalog.SOURCES, source, video_id)}
+    return {"directory": str(offline.ROOT), "items": offline.listing(catalog.SOURCES, source, video_id), "cleanup": offline.cleanup_policy()}
 
 
 @app.post("/api/offline")
@@ -147,6 +148,14 @@ def offline_download(body: OfflineIn):
         return offline.enqueue(body.source, safe_video_id(body.video_id), body.episode, body.height, restart=body.restart)
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/offline/cleanup")
+def offline_cleanup(body: OfflineCleanupIn):
+    try:
+        return offline.cleanup_policy(body.enabled)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/offline/playback")
@@ -178,12 +187,14 @@ def offline_cancel(key: str):
 
 
 @app.api_route("/api/offline/media/{key}.mp4", methods=["GET", "HEAD"])
-def offline_media(key: str):
+def offline_media(key: str, request: Request):
     try:
         path = offline.media_path(key)
         item = offline.status(key)
         if item['source'] not in catalog.SOURCES:
             raise FileNotFoundError()
+        if request.method == "GET":
+            offline.touch_played(key)
         return FileResponse(path, media_type="video/mp4", headers={"Cache-Control": "private, no-cache"})
     except (OSError, ValueError) as exc:
         raise HTTPException(404, "找不到完整的本地影片") from exc

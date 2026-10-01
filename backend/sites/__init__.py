@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..catalog import DEFAULT_SOURCE, SOURCE_LABELS, normalize_source
+from . import anigamer
 from . import chinaq
 from . import dramaq
 from . import mmov
@@ -8,6 +9,7 @@ from . import gimy
 from . import hongguo
 
 _SITES = {
+    "anigamer": anigamer,
     "hongguo": hongguo,
     "chinaq": chinaq,
     "gimy": gimy,

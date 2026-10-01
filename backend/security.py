@@ -226,6 +226,8 @@ def hls_allowed_hosts(url: str) -> set[str]:
 def assert_hls_url(url: str) -> str:
     parsed = urlparse(assert_https_url(url, hls_allowed_hosts(url)))
     path = parsed.path.lower()
+    if parsed.hostname == "bahamut.akamaized.net" and path.endswith(".m3u8key"):
+        return url
     if path.endswith((".m3u8", ".jpeg", ".jpg", ".ts", ".m4s", ".key", ".mp4")):
         return url
     raise UnsafeURL("media path not allowed")

@@ -53,3 +53,9 @@ Chromecast／Nest Hub 投放時會自動檢查連線、重新搜尋失效連線�
 在同層 Amberbox 執行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-background.ps1 -Apps OnlineCinema`，只建立／更新 Online Cinema 的獨立無視窗工作。登入後自啟，程序退出後自動恢復；記錄在 `%APPDATA%\OnlineCinema\server-logs`。變更區網設定後重啟「Online Cinema Server」工作即可，不必再開 start.bat。電腦睡眠、關機或登出時不提供服務。
 
 [新增片源與投放修正紀錄](docs/source-playback-repair-2026-09-23.md)。
+
+## 動畫瘋
+
+來源選單可選「巴哈姆特動畫瘋」，支援公開片單、搜尋與免費動畫的內建播放。首次播放約需 35 秒準備；開啟自動下一集後，會在當集播放時提前完成下一集的準備，再沿用既有串流預載。這不是付費會員方案，也不保證所有動畫皆可觀看；需要登入、年齡驗證或會員資格的作品會顯示來源錯誤。
+
+準備階段使用獨立、未登入的工作階段，實際載入並播放廣告片段滿 31 秒才請求正片；不讀取瀏覽器帳號 Cookie，也不偽造 VIP。關閉頁面或換片會取消準備並釋放播放器。免費串流的解析度與可用地區由來源站決定。下一集尚未準備好時仍需等候；此來源的獨立離線批次下載與無網頁的自動投放換集尚未支援。

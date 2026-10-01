@@ -282,6 +282,26 @@ def search(
         raise _err(e) from e
 
 
+@app.post("/api/anigamer/prepare/{video_id}")
+def prepare_anigamer(video_id: str, ep: str | None = Query(None, max_length=16)):
+    try:
+        hist = db.get_history_item(video_id, "anigamer")
+        selected = ep or (hist.get("episode_id") if hist else None)
+        return sites.get("anigamer").prepare(video_id, selected)
+    except Exception as e:
+        raise _err(e, 502) from e
+
+
+@app.post("/api/anigamer/ad/{key}/{event}")
+def anigamer_ad_event(key: str, event: str):
+    if event not in {"start", "complete", "cancel"} or len(key) > 64:
+        raise HTTPException(400, "invalid preparation")
+    try:
+        return sites.get("anigamer").ad_event(key, event)
+    except Exception as e:
+        raise _err(e, 502) from e
+
+
 @app.get("/api/video/{source}/{video_id}")
 def video_on_source(source: str, video_id: str, ep: str | None = Query(None, max_length=16)):
     src = catalog.normalize_source(source)

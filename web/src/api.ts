@@ -1,3 +1,4 @@
+import { prepareAnigamer } from "./anigamer";
 import type { Card, HomePayload, Listing, Settings, VideoDetail } from "./types";
 
 export type CastStatus = {
@@ -92,7 +93,8 @@ export const api = {
   },
   search: (q: string, page = 1, source?: string, signal?: AbortSignal) =>
     req<Listing>(withSource(`/api/search?q=${encodeURIComponent(q)}&page=${page}`, source), { signal }, source === "chinaq" || source === "dramaq" ? 35000 : undefined),
-  video: (id: string, source = "hongguo", signal?: AbortSignal, ep?: string) => {
+  video: async (id: string, source = "hongguo", signal?: AbortSignal, ep?: string) => {
+    if (source === "anigamer") await prepareAnigamer(id, ep, signal);
     const q = ep ? `?ep=${encodeURIComponent(ep)}` : "";
     return req<VideoDetail>(`/api/video/${encodeURIComponent(source)}/${encodeURIComponent(id)}${q}`, { signal }, 60000);
   },

@@ -93,6 +93,8 @@ def rewrite_playlist(text: str, base_url: str, origin: str = "", *, nesthub: boo
 
 def _media_context(url: str) -> tuple[str, str | None]:
     host = (urlparse(url).hostname or "").lower()
+    if host == "bahamut.akamaized.net":
+        return "https://ani.gamer.com.tw/", "chrome131"
     if media_host_source(host) == "mmov":
         return "https://hk.mmov.io/", "chrome131"
     if any(part in host for part in ("bfllvip", "fengbao", "baofeng", "ppqrrs", "10cong", "wangwangzyvod", "hongguoapp")):

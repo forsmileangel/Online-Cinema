@@ -353,7 +353,7 @@ export function Watch() {
   }
 
   if (err) return <div className="err">無法播放：{err}</div>;
-  if (!data) return <div className="empty">解析片源中…</div>;
+  if (!data) return <div className="empty">{source === "anigamer" ? "動畫瘋準備中，首次約需 35 秒；開啟自動下一集可提前準備…" : "解析片源中…"}</div>;
 
   const manyEps = episodes.length > 1;
   const episodeIndex = episodes.findIndex((e) => e.id === activeEp);
@@ -384,7 +384,7 @@ export function Watch() {
               }} onError={playbackError} src={playlist} startAt={startAt} startPaused={retryResume?.episode === activeEp && retryResume.paused} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} episodeControls={episodeControls} />
             ) : (
               <div className="player">
-                <div className="empty">{episodeError ? "這一集無法播放" : `載入第${activeEp || ""}集…`}</div>
+                <div className="empty">{episodeError ? "這一集無法播放" : source === "anigamer" ? `正在準備${currentEp?.title || "這一集"}…` : `載入第${activeEp || ""}集…`}</div>
                 <FavUnderFs on={!!data.favorited} onClick={() => void toggleFav()} />
               </div>
             )}

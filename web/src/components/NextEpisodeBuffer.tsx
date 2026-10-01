@@ -59,7 +59,7 @@ export function NextEpisodeBuffer({ url, title, enabled, castSession, qualityKey
   }, [url, enabled, castSession, owner, qualityKey, attempt]);
   if (!enabled || !title) return null;
   if (status.phase === "local") return <div className="muted" style={{ padding: "8px 16px" }}>下一集 {title}：已下載，將使用本地影片</div>;
-  const message = status.phase === "complete" ? "預載完成" : status.phase === "waiting" ? "等待當集緩衝" : status.phase === "error" || status.phase === "unsupported" ? status.error : "預載中";
+  const message = status.phase === "complete" ? "預載完成" : status.phase === "waiting" ? (!url && !castSession ? "準備片源中" : "等待當集緩衝") : status.phase === "error" || status.phase === "unsupported" ? status.error : "預載中";
   return <div ref={root} className="muted" role="status" style={{ padding: "8px 16px" }}>
     下一集 {title}：{message} · {stamp(status.seconds)} / {stamp(status.target)}
     {status.phase === "error" && !castSession ? <button className="btn alt" type="button" onClick={() => setAttempt(n => n + 1)}>重試預載</button> : null}

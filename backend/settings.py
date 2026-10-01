@@ -10,6 +10,7 @@ PORT = 6970
 IMPERSONATE = "safari17_2_ios"
 
 CDN_HOSTS = (
+    "bahamut.akamaized.net",
     "bfllvip.com",
     "ppqrrs.com",
     "fengbao8.com",
@@ -27,6 +28,7 @@ CDN_HOSTS = (
 )
 
 IMAGE_HOSTS = (
+    "p2.bahamut.com.tw",
     "img.mmov.app",
     "image.mmov.app",
     "picbf.com",

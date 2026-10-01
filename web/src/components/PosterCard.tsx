@@ -4,6 +4,7 @@ import type { Card } from "../types";
 import { useSource } from "../source";
 
 const SRC_BADGE: Record<string, string> = {
+  anigamer: "巴哈姆特動畫瘋",
   hongguo: "紅果短劇",
   chinaq: "中國人線上看",
   gimy: "Gimy 劇迷",

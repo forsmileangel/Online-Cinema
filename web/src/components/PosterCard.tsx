@@ -9,6 +9,7 @@ const SRC_BADGE: Record<string, string> = {
   chinaq: "中國人線上看",
   gimy: "Gimy 劇迷",
   mmov: "MMOV 電影線上看",
+  mvffm: "MVFFM 電影線上看",
   dramaq: "DramaQ",
 };
 

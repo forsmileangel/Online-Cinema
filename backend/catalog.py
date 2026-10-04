@@ -3,6 +3,7 @@ from __future__ import annotations
 DEFAULT_SOURCE = "hongguo"
 
 SOURCE_LABELS = {
+    "mvffm": "MVFFM 電影線上看",
     "anigamer": "巴哈姆特動畫瘋",
     "hongguo": "紅果短劇",
     "chinaq": "中國人線上看",

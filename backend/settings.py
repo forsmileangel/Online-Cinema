@@ -28,6 +28,7 @@ CDN_HOSTS = (
 )
 
 IMAGE_HOSTS = (
+    "mvffm.net",
     "p2.bahamut.com.tw",
     "img.mmov.app",
     "image.mmov.app",

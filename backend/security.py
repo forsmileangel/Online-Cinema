@@ -42,6 +42,10 @@ class UnsafeURL(ValueError):
     pass
 
 
+class HostUnresolvable(UnsafeURL):
+    """Still refused, but a DNS failure is transient and worth retrying."""
+
+
 class SourceUnavailable(Exception):
     """A known source availability condition with a safe user-facing message."""
 
@@ -116,6 +120,14 @@ def _host_ok(host: str, allowed: set[str]) -> bool:
     return any(host.endswith("." + a) for a in allowed)
 
 
+# A media playlist names its CDN once per segment. Hosts with very short DNS
+# TTLs are not cached by Windows, so re-resolving each URL can take minutes.
+# Only public results are reused; the connection itself resolves again.
+_PUBLIC_DNS_TTL = 300.0
+_public_hosts: dict[str, float] = {}
+_public_hosts_lock = threading.Lock()
+
+
 def _assert_not_private(host: str) -> None:
     try:
         ip = ipaddress.ip_address(host)
@@ -125,16 +137,25 @@ def _assert_not_private(host: str) -> None:
         if not ip.is_global:
             raise UnsafeURL("address not allowed")
         return
+    with _public_hosts_lock:
+        if _public_hosts.get(host, 0) > time.monotonic():
+            return
     try:
         infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
     except socket.gaierror as e:
-        raise UnsafeURL("host not resolvable") from e
+        raise HostUnresolvable("host not resolvable") from e
     if not infos:
-        raise UnsafeURL("host not resolvable")
+        raise HostUnresolvable("host not resolvable")
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         if not ip.is_global:
             raise UnsafeURL("address not allowed")
+    with _public_hosts_lock:
+        now = time.monotonic()
+        if len(_public_hosts) >= 1024:
+            for expired in [key for key, until in _public_hosts.items() if until <= now] or list(_public_hosts)[:256]:
+                del _public_hosts[expired]
+        _public_hosts[host] = now + _PUBLIC_DNS_TTL
 
 
 def assert_https_url(url: str, allowed_hosts: set[str]) -> str:

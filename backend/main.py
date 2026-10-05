@@ -44,6 +44,7 @@ from .models import (
     CastDeviceConfigIn,
 )
 from .security import (
+    HostUnresolvable,
     IMAGE_HOSTS,
     SiteBusy,
     SourceUnavailable,
@@ -129,6 +130,8 @@ def _err(exc: Exception, status: int = 400) -> HTTPException:
         return HTTPException(504, "來源載入逾時，請重試")
     if isinstance(exc, SiteBusy):
         return HTTPException(exc.status_code or 503, str(exc), headers={"Retry-After": str(exc.retry_after)} if exc.retry_after is not None else None)
+    if isinstance(exc, HostUnresolvable):
+        return HTTPException(502, "來源網域暫時查不到，請稍後重試")
     if isinstance(exc, UnsafeURL):
         return HTTPException(status, "請求被拒絕")
     return HTTPException(502, "來源站暫時無法使用")

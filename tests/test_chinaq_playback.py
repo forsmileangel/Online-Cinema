@@ -21,6 +21,7 @@ class ChinaqPlaybackTests(unittest.TestCase):
                         'http://v3.qqqrst.com/x.m3u8', 'https://v3.qqqrst.com:999/x.m3u8'):
                 with self.subTest(url=url), self.assertRaises(security.UnsafeURL):
                     security.assert_hls_url(url)
+        security._public_hosts.clear()  # the cached public verdict has expired
         with patch.object(security.socket, 'getaddrinfo', return_value=[(0,0,0,'',('127.0.0.1',443))]):
             with self.assertRaises(security.UnsafeURL):
                 security.assert_hls_url(FIRST)

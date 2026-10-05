@@ -87,6 +87,7 @@ class CdnRepairTests(unittest.TestCase):
                 security.assert_hls_url('https://'+host+'/neutral.m3u8')
             for host in ['unrelatedukubf.com','unrelatedjisuzyv.com','jisuzyv.com.example.org'] + (['unrelatedbfvvs.com'] if HAS_DRAMA else []):
                 with self.assertRaises(security.UnsafeURL): security.assert_hls_url('https://'+host+'/neutral.m3u8')
+        security._public_hosts.clear()  # the cached public verdict has expired
         with patch.object(security.socket,'getaddrinfo',return_value=[(2,1,6,'',('127.0.0.1',443))]):
             with self.assertRaises(security.UnsafeURL): security.assert_hls_url('https://vv.jisuzyv.com/neutral.m3u8')
 

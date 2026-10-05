@@ -102,7 +102,9 @@ class MediaRedirectTests(unittest.TestCase):
 
     def test_redirects_share_the_request_timeout(self):
         session = Mock(request=Mock(return_value=response(SOURCE, 302, {'location': TARGET})))
-        with patch.object(http_client, 'media_session', return_value=session), patch.object(http_client.time, 'monotonic', side_effect=[0, 1, 6]):
+        # The fake clock is global; keep the DNS check out of this timing test.
+        with patch.object(http_client, 'media_session', return_value=session), patch.object(security, '_assert_not_private'), \
+                patch.object(http_client.time, 'monotonic', side_effect=[0, 1, 6]):
             with self.assertRaises(TimeoutError):
                 http_client.fetch_bytes(SOURCE, referer='https://gimyai.tw/', allowed_hosts=security.hls_allowed_hosts(SOURCE),
                                         timeout=5, redirect_validator=Mock())

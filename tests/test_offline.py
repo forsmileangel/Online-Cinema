@@ -103,7 +103,7 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(fetch.call_count, 3)
         self.assertNotIn('https:', path.read_text())
         self.assertIn('000000.key', path.read_text())
-        self.assertTrue(fetch.call_args.args[0].endswith('/moved/second.ts'))
+        self.assertTrue(any(call.args[0].endswith('/moved/second.ts') for call in fetch.call_args_list))
 
     def test_refusal_invalid_html_partial_and_private_sources_never_publish(self):
         for data, length in [(b'<html>denied</html>', '19'), (b'partial', '99')]:
@@ -196,7 +196,11 @@ class OfflineTests(unittest.TestCase):
         leaf = '#EXTM3U\n#EXTINF:10,\na.ts\n#EXTINF:10,\nb.ts\n#EXT-X-ENDLIST\n'
         def response(data):
             return Mock(status_code=200, headers={'content-length': str(len(data))}, iter_content=lambda **kw: iter([data]))
-        with patch.object(hls_proxy, '_read_playlist', return_value=(leaf, URL)), patch.object(offline.http_client, 'fetch_bytes', side_effect=[response(b'first'), RuntimeError('interrupted')]):
+        def interrupted(url, **kwargs):
+            if url.endswith('/b.ts'):
+                raise RuntimeError('interrupted')
+            return response(b'first')
+        with patch.object(hls_proxy, '_read_playlist', return_value=(leaf, URL)), patch.object(offline.http_client, 'fetch_bytes', side_effect=interrupted):
             with self.assertRaisesRegex(RuntimeError, 'interrupted'):
                 offline._hls(URL, work, offline.ROOT, 720, Mock())
         self.assertEqual((work / '000000.ts').read_bytes(), b'first')

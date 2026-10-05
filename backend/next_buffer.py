@@ -72,6 +72,12 @@ def foreground(active):
         _last_foreground = time.monotonic()
 
 
+def playback_idle(seconds):
+    """True when no media request has been served for the given seconds."""
+    with _lock:
+        return not _foreground and time.monotonic() - _last_foreground >= seconds
+
+
 @dataclass
 class Job:
     owner: str

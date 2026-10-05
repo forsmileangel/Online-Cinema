@@ -569,6 +569,21 @@ class Cancelled(Exception):
     pass
 
 
+class _LaneStopped(Exception):
+    """Another segment connection of the same episode failed or was cancelled."""
+
+
+_lane = threading.local()
+
+
+def _lane_check():
+    # A failed sibling connection ends new requests and retries, but the segment
+    # already being received is allowed to finish.
+    stop = getattr(_lane, 'stop', None)
+    if stop is not None and stop.is_set():
+        raise _LaneStopped()
+
+
 def _check(folder):
     if (folder / 'cancel').exists() or (folder / 'delete.json').exists():
         raise Cancelled()
@@ -608,9 +623,23 @@ def _transient(error):
 def _wait_retry(folder, delay):
     until = time.monotonic() + delay
     while time.monotonic() < until:
+        _lane_check()
         _check(folder)
         time.sleep(min(.25, max(0, until - time.monotonic())))
     _check(folder)
+
+
+PLAYBACK_IDLE = 2
+PLAYBACK_WAIT = 30
+PARALLEL_SEGMENTS = 3
+
+
+def _yield_to_playback(folder):
+    """Let a playing browser or TV refill its buffer first, without stalling forever."""
+    until = time.monotonic() + PLAYBACK_WAIT
+    while not next_buffer.playback_idle(PLAYBACK_IDLE) and time.monotonic() < until:
+        _check(folder)
+        time.sleep(.25)
 
 
 def _retry(operation, folder, on_retry=None, position=None):
@@ -649,6 +678,7 @@ def _download(url, path, folder, limit=None, *, resume_partial=False, progress=N
 
 
 def _download_once(url, path, folder, limit=None, *, resume_partial=False, progress=None):
+    _lane_check()
     assert_hls_url(url)
     _check(folder)
     if path.is_symlink() or path.resolve().parent != path.parent.resolve():
@@ -811,17 +841,73 @@ def _hls(url, work, folder, height, progress, on_retry=None):
         for remote in pending:
             assert_hls_url(remote)
     progress(round(len(completed) * 100 / len(resources), 1))
-    for remote, filename in resources:
-        if filename in completed: continue
-        def segment_progress(value):
-            progress(round((len(completed) + min(value, 100) / 100) * 100 / len(resources), 1))
-        _download(remote, work / filename, folder, 256 * 1024 * 1024,
-                  progress=segment_progress, on_retry=on_retry)
-        completed.add(filename)
-        progress(round(len(completed) * 100 / len(resources), 1))
+    _download_segments(work, folder, [(remote, filename) for remote, filename in resources if filename not in completed],
+                       completed, len(resources), progress, on_retry)
     playlist = work / 'index.m3u8'
     playlist.write_text('\n'.join(lines) + '\n', encoding='utf-8')
     return playlist, duration
+
+
+def _download_segments(work, folder, pending, completed, total, progress, on_retry):
+    """Use a few connections while nothing plays, and a single yielding one while media plays."""
+    lock = threading.Lock()
+    waiting = list(reversed(pending))
+    partial = {}
+    stop = threading.Event()
+    failures = []
+
+    def report(filename=None, value=0):
+        with lock:
+            if filename is not None:
+                partial[filename] = min(value, 100) / 100
+            done = len(completed) + sum(partial.values())
+        progress(round(done * 100 / total, 1))
+
+    def lane(index):
+        _lane.stop = stop
+        try:
+            while not stop.is_set():
+                with lock:
+                    if not waiting:
+                        return
+                if index:
+                    # Extra connections never compete with a playing browser or TV.
+                    if not next_buffer.playback_idle(PLAYBACK_IDLE):
+                        _lane_check()
+                        _check(folder)
+                        time.sleep(.25)
+                        continue
+                else:
+                    _yield_to_playback(folder)
+                with lock:
+                    if not waiting:
+                        return
+                    remote, filename = waiting.pop()
+                _download(remote, work / filename, folder, 256 * 1024 * 1024,
+                          progress=lambda value, name=filename: report(name, value), on_retry=on_retry)
+                with lock:
+                    partial.pop(filename, None)
+                    completed.add(filename)
+                report()
+        except _LaneStopped:
+            pass
+        except BaseException as error:
+            # A refusal, cancellation or bad segment stops every connection;
+            # none of them starts another segment or retry afterwards.
+            with lock:
+                failures.append(error)
+            stop.set()
+        finally:
+            _lane.stop = None
+
+    lanes = [threading.Thread(target=lane, args=(index,), name=f'offline-segment-{index}', daemon=True)
+             for index in range(min(PARALLEL_SEGMENTS, len(pending)))]
+    for thread in lanes:
+        thread.start()
+    for thread in lanes:
+        thread.join()
+    if failures:
+        raise failures[0]
 
 
 def _hls_plan(url, folder, height, on_retry):
@@ -924,9 +1010,12 @@ def _saved_inputs_complete(work, url):
 def _run(item):
     folder = _folder(item['id'])
     work = folder / 'parts'
+    # Segment connections report progress and retries from their own threads.
+    save_lock = threading.RLock()
     def save(**values):
-        item.update(values)
-        _write(folder / 'status.json', item)
+        with save_lock:
+            item.update(values)
+            _write(folder / 'status.json', item)
     try:
         _check(folder)
         save(phase='downloading', progress=item.get('progress', 0))
@@ -936,8 +1025,16 @@ def _run(item):
         def retrying(attempt, delay, error):
             save(phase='retrying', retry_attempt=attempt, retry_at=time.time() + delay,
                  error='連線逾時或下載不完整，正在自動續傳')
+        written = [0.0, -1.0]
         def progress(value):
-            save(phase='downloading', progress=value, error='', retry_at=0)
+            # Status is polled by the UI; per-chunk rewrites only add disk churn.
+            with save_lock:
+                now = time.monotonic()
+                changed = item.get('phase') != 'downloading' or item.get('error') or item.get('retry_at')
+                item.update(phase='downloading', progress=value, error='', retry_at=0)
+                if changed or value >= 100 or now - written[0] >= 1 or abs(value - written[1]) >= 1:
+                    written[:] = [now, value]
+                    save()
         saved = _read(work / 'source.json')
         if saved:
             detail = VideoDetail.model_validate(saved['detail'])

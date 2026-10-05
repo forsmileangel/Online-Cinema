@@ -52,7 +52,7 @@ class SeriesRepairTests(unittest.TestCase):
     def test_history_selects_before_resolution_and_explicit_episode_does_not_reuse_seconds(self):
         for requested,history,expected,seconds in [(None,{'episode_id':'2','position_sec':42},'2',42),
                 ('3',{'episode_id':'2','position_sec':42},'3',0),(None,None,'1',0)]:
-            with self.subTest(requested=requested), patch.object(db,'get_history_item',return_value=history), patch.object(db,'is_favorite',return_value=False):
+            with self.subTest(requested=requested), patch.object(db,'get_history_item',return_value=history), patch.object(db,'is_favorite',return_value=False), patch.object(main.offline,'ROOT',Path(__file__).with_name('no-offline-library')), patch.object(main.offline,'_maintenance_started',True):
                 resolver=Mock(fetch_video=Mock(side_effect=lambda vid,ep=None: detail(ep or '1')))
                 with patch.object(main.sites,'get',return_value=resolver):
                     result=main.video_on_source('chinaq','12345',requested)

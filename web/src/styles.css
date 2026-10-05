@@ -292,6 +292,7 @@ button.chip { font: inherit; }
   width: 100%; height: auto;
   max-height: var(--player-max, none);
   user-select: none; cursor: pointer;
+  touch-action: manipulation;
 }
 .player video {
   position: absolute; inset: 0;
@@ -322,7 +323,9 @@ button.chip { font: inherit; }
   opacity: 0; transition: opacity 0.2s;
   pointer-events: none;
 }
-.player.show .overlay, .player:hover .overlay { opacity: 1; }
+.player.show .overlay, .player .overlay:has(:focus-visible) { opacity: 1; }
+.player:not(.show) { cursor: none; }
+.player:not(.show) .controls:not(:has(:focus-visible)) { pointer-events: none; }
 .controls { padding: 10px 16px 14px; pointer-events: auto; }
 .vol {
   display: flex; align-items: center; gap: 6px; flex-shrink: 0;
@@ -536,4 +539,32 @@ select.field, .field {
   .cast-actions { gap: 6px; }
   .cast-current-episode { font-size: 12px; }
   .cast-target { max-width: none; }
+}
+
+/* Player feedback: speed, on-screen hints and the next episode prompt. */
+.ctrl-row select.rate { padding: 6px 8px; }
+.loading-pill.spin::before {
+  content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px;
+  border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%;
+  animation: pill-spin .8s linear infinite;
+}
+@keyframes pill-spin { to { transform: rotate(360deg); } }
+.osd {
+  position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); z-index: 4;
+  background: rgba(0,0,0,.65); color: #fff; padding: 10px 18px; border-radius: 12px;
+  font-size: 18px; font-weight: 600; pointer-events: none; white-space: nowrap;
+}
+.next-up {
+  position: absolute; right: 16px; bottom: 112px; z-index: 4;
+  display: inline-flex; align-items: center; gap: 6px; max-width: min(60%, 320px);
+  background: rgba(20,20,20,.9); color: #fff; border: 1px solid #666; border-radius: 10px;
+  padding: 10px 14px; font-weight: 600; white-space: nowrap; transition: bottom .2s;
+}
+.next-up span { color: #ccc; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+.next-up:hover, .next-up:focus-visible { background: var(--accent); border-color: var(--accent); }
+.next-up:hover span, .next-up:focus-visible span { color: #fff; }
+.player:not(.show) .next-up { bottom: 24px; }
+@media (max-width: 720px) {
+  .next-up { right: 10px; bottom: 132px; padding: 8px 10px; font-size: 13px; }
+  .osd { font-size: 15px; padding: 8px 14px; }
 }

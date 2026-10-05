@@ -19,13 +19,26 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
   const generation = useRef(0);
   const pending = useRef(false);
   const lastPosition = useRef(0);
+  const seekTarget = useRef<{ position: number; until: number } | null>(null);
   const callbacks = useRef({ getPosition, onReturn, onEpisode, context });
   callbacks.current = { getPosition, onReturn, onEpisode, context };
+
+  function trackPosition(next: CastSession) {
+    // Buffering after a seek already reports the new spot; LG may report 0 while transitioning.
+    if (next.idle || !(next.playing || next.paused || (next.buffering && next.current_time > 0))) return;
+    const target = seekTarget.current;
+    if (target) {
+      // A queued seek is answered with the old position until the TV reaches the new one.
+      if (Date.now() < target.until && Math.abs(next.current_time - target.position) > 5) return;
+      seekTarget.current = null;
+    }
+    lastPosition.current = next.current_time;
+  }
 
   function remember(next: CastSession) {
     setStatus(next);
     setUncertain(!!next.error || next.phase === "error" || next.phase === "replaced");
-    if (next.playing || next.paused) lastPosition.current = next.current_time;
+    trackPosition(next);
     callbacks.current.onEpisode(next.episode_id, next.playlist, next.autoplay_next);
     const labels: Record<string, string> = { reconnecting: "正在重新連接電視，確認原本的播放進度…", waking: "正在喚醒電視，最多等待 60 秒…", loading: "正在載入，等待電視確認播放…",
       playing: "電視已確認播放，本機保持暫停。關閉網頁後仍可自動連播。", paused: "電視已確認暫停", ended: "已播放完畢", stopped: "電視已停止" };
@@ -104,6 +117,7 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
     const version = generation.current;
     const position = active ? lastPosition.current : callbacks.current.getPosition();
     lastPosition.current = position;
+    seekTarget.current = null;
     setActive({ uuid: selected, session_id: "" }); setStatus(null); setUncertain(false);
     setMsg(wake ? "正在喚醒電視…" : "正在建立投放…");
     try {
@@ -127,6 +141,11 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
 
   async function control(action: "pause" | "resume" | "seek" | "stop", position?: number) {
     if (action !== "stop" && !(action === "seek" ? canSeek : canControl)) return;
+    if (action === "seek" && position != null && active?.session_id && !pending.current) {
+      // Stopping right after a seek must return to where the user dragged to.
+      seekTarget.current = { position, until: Date.now() + 20000 };
+      lastPosition.current = position;
+    }
     await command(action, { position_sec: position });
   }
 

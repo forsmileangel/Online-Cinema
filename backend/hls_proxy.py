@@ -64,18 +64,23 @@ def _playlist_media_url(url: str, parent_host: str) -> str:
     return validated
 
 
-def rewrite_playlist(text: str, base_url: str, origin: str = "", *, nesthub: bool = False, web: bool = False) -> str:
+def rewrite_playlist(text: str, base_url: str, origin: str = "", *, nesthub: bool = False, web: bool = False,
+                     segments: list[str] | None = None) -> str:
     if len(text) > 2_000_000:
         raise UnsafeURL("playlist too large")
     if nesthub:
         _validate_nesthub_playlist(text)
     parent_host = (urlparse(base_url).hostname or "").lower()
+    # Media playlists report their validated segment order for prefetching.
+    collect = segments is not None and "#EXTINF" in text
     out: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
         if stripped and not stripped.startswith("#"):
             abs_url = urljoin(base_url, stripped)
-            _playlist_media_url(abs_url, parent_host)
+            validated = _playlist_media_url(abs_url, parent_host)
+            if collect:
+                segments.append(validated)
             out.append(proxied_media(abs_url, origin, nesthub=nesthub, web=web))
             continue
         if "URI=" in line:
@@ -268,8 +273,11 @@ def serve_media(request: Request, raw_url: str) -> Response:
             path = urlparse(url).path.lower()
             playlist = path.endswith(".m3u8")
             if playlist:
+                segments: list[str] = []
                 text = rewrite_playlist(saved.decode("utf-8", "replace"), url, str(request.base_url).rstrip("/"),
-                                        nesthub=request.query_params.get("nesthub") == "1", web=request.query_params.get("web") == "1")
+                                        nesthub=request.query_params.get("nesthub") == "1", web=request.query_params.get("web") == "1",
+                                        segments=segments)
+                seg_cache.remember(segments)
                 body = text.encode()
                 return Response(b"" if request.method == "HEAD" else body, media_type="application/vnd.apple.mpegurl",
                                 headers={"Cache-Control": "no-store", "Content-Length": str(len(body))})
@@ -296,6 +304,58 @@ def serve_media(request: Request, raw_url: str) -> Response:
         next_buffer.foreground(False)
 
 
+def _read_segment(response, deadline: float) -> bytes:
+    """Read one whole segment; a short body is a network failure, never cached."""
+    headers = {k.lower(): v for k, v in response.headers.items()}
+    expected = headers.get("content-length", "")
+    want = int(expected) if expected.isdigit() and "content-encoding" not in headers else None
+    data = bytearray()
+    for chunk in response.iter_content(chunk_size=256 * 1024):
+        if len(data) + len(chunk) > 30_000_000:
+            raise UnsafeURL("segment too large")
+        data.extend(chunk)
+        if time.monotonic() > deadline and not (want is not None and len(data) >= want):
+            raise TimeoutError("影片分段下載逾時，請重試")
+    if want is not None and len(data) != want:
+        raise ConnectionError("影片分段不完整")
+    return bytes(data)
+
+
+def _fetch_segment(url: str, referer: str, imp: str | None, deadline: float) -> bytes:
+    # Finish segment retries before the browser starts another copy of the same
+    # request. Never splice partial bytes from different connections.
+    interfaces: list[str | None] = [None]
+    for attempt in range(3):
+        left = deadline - time.monotonic()
+        if left <= 0:
+            break
+        interface = interfaces[min(attempt, len(interfaces) - 1)]
+        try:
+            # Streaming turns the limit into connect/stall timeouts: a dead route
+            # fails over quickly, while a slow but steady one may use the budget.
+            response = http_client.fetch_bytes(url, referer=referer, allowed_hosts=hls_allowed_hosts(url), timeout=min(left, 6),
+                                               stream=True, impersonate=imp, redirect_validator=_playlist_media_url, interface=interface)
+            try:
+                return _read_segment(response, deadline)
+            finally:
+                http_client.close_response(response)
+        except SiteBusy:
+            seg_cache.pause(url)
+            raise
+        except UnsafeURL:
+            raise
+        except Exception as error:
+            if attempt == 2 or not http_client.is_network_failure(error):
+                raise
+            if attempt == 0:
+                ips = lan.download_interfaces()
+                if len(ips) > 1:
+                    interfaces = [None, ips[1], ips[0]]
+            logging.getLogger(__name__).warning("Segment download retry host=%s attempt=%s interface=%s cause=%s",
+                urlparse(url).hostname, attempt + 2, interfaces[min(attempt + 1, len(interfaces) - 1)] or "default", type(error).__name__)
+    raise TimeoutError("影片分段下載逾時，請重試")
+
+
 def _serve_media(request: Request, raw_url: str) -> Response:
     url = assert_hls_url(raw_url)
     parsed = urlparse(url)
@@ -317,75 +377,63 @@ def _serve_media(request: Request, raw_url: str) -> Response:
             else "video/mp2t" if path.endswith((".ts", ".jpeg")) else "application/octet-stream")
     if cacheable:
         seg_cache.start_workers()
-        cached = seg_cache.get(url)
-        if cached is not None:
+        deadline = time.monotonic() + 18
+        # A prefetch or an earlier browser attempt may already be downloading it.
+        cached = seg_cache.get(url) or seg_cache.wait(url, 8)
+        if cached is None:
+            with seg_cache.fetching(url):
+                cached = _fetch_segment(url, referer, imp, deadline)
+                seg_cache.put(url, cached)
+        else:
             touch_media_host(url)
-            seg_cache.enqueue_next(url, referer)
-            if convert_segment:
-                return _nesthub_segment(request, url, cached)
-            return Response(cached, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
+        seg_cache.enqueue_next(url)
+        if convert_segment:
+            return _nesthub_segment(request, url, cached)
+        return Response(cached, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
 
-    # Finish segment retries before the browser starts another copy of the same
-    # request. Never splice partial bytes from different connections.
-    deadline = time.monotonic() + (18 if cacheable else 30)
-    interfaces: list[str | None] = [None]
+    deadline = time.monotonic() + 30
     for attempt in range(3):
         left = deadline - time.monotonic()
         if left <= 0:
             raise TimeoutError("影片分段下載逾時，請重試")
-        interface = interfaces[min(attempt, len(interfaces) - 1)]
         try:
-            response = http_client.fetch_bytes(url, referer=referer, allowed_hosts=hls_allowed_hosts(url), timeout=min(left, 6) if cacheable else left,
-                                               stream=not playlist and not cacheable, impersonate=imp,
-                                               method="GET" if playlist or convert_segment else request.method, range_header=None if playlist else range_header,
-                                               redirect_validator=_playlist_media_url, interface=interface)
+            response = http_client.fetch_bytes(url, referer=referer, allowed_hosts=hls_allowed_hosts(url), timeout=left,
+                                               stream=not playlist, impersonate=imp,
+                                               method="GET" if playlist else request.method, range_header=None if playlist else range_header,
+                                               redirect_validator=_playlist_media_url)
             break
         except SiteBusy:
             raise
         except UnsafeURL:
             raise
-        except Exception as error:
+        except Exception:
             if attempt == 2:
-                raise
-            if cacheable and http_client.is_network_failure(error):
-                if attempt == 0:
-                    ips = lan.download_interfaces()
-                    if len(ips) > 1:
-                        interfaces = [None, ips[1], ips[0]]
-                logging.getLogger(__name__).warning("Segment download retry host=%s attempt=%s interface=%s cause=%s",
-                    parsed.hostname, attempt + 2, interfaces[min(attempt + 1, len(interfaces) - 1)] or "default", type(error).__name__)
-            elif cacheable:
                 raise
     upstream = {k.lower(): v for k, v in response.headers.items()}
     headers = {k: upstream[k] for k in ("content-length", "content-range", "accept-ranges") if k in upstream}
     headers["Cache-Control"] = "no-store" if playlist else "private, max-age=3600"
-    if response.status_code == 416 or (request.method == "HEAD" and not playlist and not convert_segment):
+    if response.status_code == 416 or (request.method == "HEAD" and not playlist):
         http_client.close_response(response)
         return Response(status_code=response.status_code, media_type=mime, headers=headers)
 
-    if playlist or cacheable:
+    if playlist:
         try:
             raw = response.content
         finally:
             http_client.close_response(response)
-        if playlist:
-            text = raw.decode("utf-8", "replace")
-            if not text.lstrip().startswith("#EXTM3U"):
-                raise UnsafeURL("invalid playlist")
-            # Absolute nested playlists, AES keys and map URIs work on both receivers.
-            rewritten = rewrite_playlist(text, str(response.url), str(request.base_url).rstrip("/"), nesthub=nesthub, web=request.query_params.get("web") == "1")
-            body = rewritten.encode()
-            # HEAD describes the rewritten GET representation. An empty Response
-            # otherwise advertises Content-Length: 0 to LG's startup probe.
-            return Response(b"" if request.method == "HEAD" else body, media_type=mime,
-                            headers={"Cache-Control": "no-store", "Content-Length": str(len(body))})
-        if len(raw) > 30_000_000:
-            raise UnsafeURL("segment too large")
-        seg_cache.put(url, raw)
-        seg_cache.enqueue_next(url, referer)
-        if convert_segment:
-            return _nesthub_segment(request, url, raw)
-        return Response(raw, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
+        text = raw.decode("utf-8", "replace")
+        if not text.lstrip().startswith("#EXTM3U"):
+            raise UnsafeURL("invalid playlist")
+        segments: list[str] = []
+        # Absolute nested playlists, AES keys and map URIs work on both receivers.
+        rewritten = rewrite_playlist(text, str(response.url), str(request.base_url).rstrip("/"), nesthub=nesthub,
+                                     web=request.query_params.get("web") == "1", segments=segments)
+        seg_cache.remember(segments)
+        body = rewritten.encode()
+        # HEAD describes the rewritten GET representation. An empty Response
+        # otherwise advertises Content-Length: 0 to LG's startup probe.
+        return Response(b"" if request.method == "HEAD" else body, media_type=mime,
+                        headers={"Cache-Control": "no-store", "Content-Length": str(len(body))})
 
     def chunks():
         try:

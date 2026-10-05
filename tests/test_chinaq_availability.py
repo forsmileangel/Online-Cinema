@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from backend import main, security
@@ -30,7 +31,8 @@ class ChinaqAvailabilityTests(unittest.TestCase):
         self.assertEqual([ep.id for ep in detail.episodes], ['1'])
 
     def test_api_explains_trailer_only_but_does_not_expose_guard_details(self):
-        with patch.object(main.db, 'get_history_item', return_value=None), patch.object(main.sites, 'get', return_value=chinaq), patch.object(chinaq, '_get', return_value=TRAILER), patch.object(chinaq, '_qplays') as fetch:
+        with patch.object(main.db, 'get_history_item', return_value=None), patch.object(main.sites, 'get', return_value=chinaq), patch.object(chinaq, '_get', return_value=TRAILER), patch.object(chinaq, '_qplays') as fetch, \
+                patch.object(main.offline, 'ROOT', Path(__file__).with_name('no-offline-library')), patch.object(main.offline, '_maintenance_started', True):
             with self.assertRaises(main.HTTPException) as caught:
                 main.video_on_source('chinaq', VID, ep=None)
         self.assertEqual(caught.exception.status_code, 404)

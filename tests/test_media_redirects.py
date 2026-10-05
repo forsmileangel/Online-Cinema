@@ -12,7 +12,8 @@ TARGET = 'https://cnvod.jimxtc.com/episode/segment.ts?hash=example'
 
 
 def response(url, status=200, headers=None, content=b'\x47' * 188):
-    return Mock(url=url, status_code=status, headers=headers or {}, content=content)
+    return Mock(url=url, status_code=status, headers=headers or {}, content=content,
+                iter_content=Mock(side_effect=lambda *args, **kwargs: iter([content])))
 
 
 class MediaRedirectTests(unittest.TestCase):

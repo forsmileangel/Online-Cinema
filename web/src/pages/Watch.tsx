@@ -80,6 +80,7 @@ export function Watch() {
   const requestedEpisode = searchParams.get("ep") || undefined;
   const source = sourceParam && sourceParam !== "watch" ? sourceParam : "hongguo";
   const [data, setData] = useState<VideoDetail | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [err, setErr] = useState("");
   const [zhTitle, setZhTitle] = useState("");
   const [zhDesc, setZhDesc] = useState("");
@@ -125,7 +126,7 @@ export function Watch() {
       .then((next) => { if (!controller.signal.aborted) { posRef.current = next.position_sec || 0; setData(next); } })
       .catch((e: Error) => { if (!controller.signal.aborted) setErr(e.message); });
     return () => controller.abort();
-  }, [id, source, requestedEpisode]);
+  }, [id, source, requestedEpisode, loadAttempt]);
 
   useEffect(() => {
     if (!data) return;
@@ -352,7 +353,15 @@ export function Watch() {
     setData({ ...data, favorited: !data.favorited });
   }
 
-  if (err) return <div className="err">無法播放：{err}</div>;
+  if (err) return (
+    <div className="err" role="alert">
+      <p>無法載入影片：{err}</p>
+      <div className="actions">
+        <button className="btn" type="button" data-tv="1" onClick={() => setLoadAttempt(n => n + 1)}>重新載入</button>
+        <Link className="btn alt" data-tv="1" to={prefix || "/"}>返回首頁</Link>
+      </div>
+    </div>
+  );
   if (!data) return <div className="empty">{source === "anigamer" ? "動畫瘋準備中，首次約需 35 秒；開啟自動下一集可提前準備…" : "解析片源中…"}</div>;
 
   const manyEps = episodes.length > 1;
@@ -381,10 +390,10 @@ export function Watch() {
               <Player key={`${activeEp}:${resolveAttempt}`} onPlaybackStarted={() => {
                 setOfflineError("");
                 void notifyOfflinePlayback(source, id, activeEp).catch(e => setOfflineError(`停止此集下載失敗：${e.message}`));
-              }} onError={playbackError} src={playlist} startAt={startAt} startPaused={retryResume?.episode === activeEp && retryResume.paused} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} episodeControls={episodeControls} />
+              }} onError={playbackError} src={playlist} startAt={startAt} startPaused={retryResume?.episode === activeEp && retryResume.paused} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} episodeControls={episodeControls} nextEpisode={nextEpisode && !cast.active && !cast.busy ? { title: nextEpisode.title, onPlay: () => pickEpisode(nextEpisode.id) } : undefined} />
             ) : (
               <div className="player">
-                <div className="empty">{episodeError ? "這一集無法播放" : source === "anigamer" ? `正在準備${currentEp?.title || "這一集"}…` : `載入第${activeEp || ""}集…`}</div>
+                <div className="empty">{episodeError ? (recovery.pending ? "正在重新連線，稍後從原進度繼續…" : "這一集無法播放") : source === "anigamer" ? `正在準備${currentEp?.title || "這一集"}…` : `載入第${activeEp || ""}集…`}</div>
                 <FavUnderFs on={!!data.favorited} onClick={() => void toggleFav()} />
               </div>
             )}

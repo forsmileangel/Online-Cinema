@@ -10,6 +10,10 @@ from backend import hls_proxy, http_client, lan, seg_cache, security
 URL = 'https://svip.xgplay20.com/episode/segment.ts?hash=sample'
 
 
+def segment(body, url=URL, headers=None):
+    return Mock(status_code=200, headers=headers or {}, url=url, iter_content=Mock(return_value=iter([body])))
+
+
 class MediaFailoverTests(unittest.TestCase):
     def setUp(self):
         for target, name, kwargs in [
@@ -33,7 +37,7 @@ class MediaFailoverTests(unittest.TestCase):
             url = 'https://media.example.com/' + path
             with self.subTest(path=path), \
                     patch.object(http_client, 'fetch_bytes', side_effect=[TimeoutError('slow'),
-                        Mock(status_code=200, headers={}, content=b'whole segment', url=url)]) as fetch, \
+                        segment(b'whole segment', url)]) as fetch, \
                     patch.object(lan, 'download_interfaces', return_value=['192.168.1.15', '192.168.1.10']), \
                     patch.object(seg_cache, 'put'):
                 self.assertEqual(self.serve(url).body, b'whole segment')
@@ -41,7 +45,7 @@ class MediaFailoverTests(unittest.TestCase):
                 self.assertEqual(fetch.call_args.kwargs['interface'], '192.168.1.10')
 
     def test_partial_download_retries_whole_segment_on_other_adapter(self):
-        complete = Mock(status_code=200, headers={}, content=b'complete segment', url=URL)
+        complete = segment(b'complete segment')
         partial = requests.RequestsError('truncated', code=CurlECode.PARTIAL_FILE)
         with patch.object(http_client, 'fetch_bytes', side_effect=[partial, complete]) as fetch, \
                 patch.object(lan, 'download_interfaces', return_value=['192.168.1.15', '192.168.1.10']), \
@@ -50,14 +54,19 @@ class MediaFailoverTests(unittest.TestCase):
         self.assertEqual(result.body, b'complete segment')
         self.assertEqual([c.args[0] for c in fetch.call_args_list], [URL, URL])
         self.assertEqual([c.kwargs['interface'] for c in fetch.call_args_list], [None, '192.168.1.10'])
-        self.assertTrue(all(c.kwargs['timeout'] <= 6 for c in fetch.call_args_list))
+        self.assertTrue(all(c.kwargs['timeout'] <= 6 and c.kwargs['stream'] for c in fetch.call_args_list))
         save.assert_called_once_with(URL, b'complete segment')
         complete.close.assert_called_once()
 
     def test_retries_share_total_budget_including_adapter_detection(self):
-        with patch.object(http_client, 'fetch_bytes', side_effect=TimeoutError('slow')) as fetch, \
+        clock = [0.0]
+
+        def slow(*args, **kwargs):
+            clock[0] += 10
+            raise TimeoutError('slow')
+        with patch.object(http_client, 'fetch_bytes', side_effect=slow) as fetch, \
                 patch.object(lan, 'download_interfaces', return_value=['192.168.1.15', '192.168.1.10']), \
-                patch.object(hls_proxy.time, 'monotonic', side_effect=[0, 0, 10, 18]), \
+                patch.object(hls_proxy.time, 'monotonic', side_effect=lambda: clock[0]), \
                 patch.object(seg_cache, 'put') as save:
             with self.assertRaises(TimeoutError):
                 self.serve()

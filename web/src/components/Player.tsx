@@ -1,10 +1,26 @@
 import Hls from "hls.js";
 import { api } from "../api";
-import { useEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode, type WheelEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import type { CastingController } from "../hooks/useCasting";
 
 const VOL_KEY = "cinema.volume";
 const QUALITY_KEY = "cinema.quality";
+const RATE_KEY = "cinema.rate";
+const RATES = [0.75, 1, 1.25, 1.5, 2];
+// Seconds between in-place retries of the same stream before a fresh source is resolved.
+const NETWORK_RETRIES = [1, 3, 6, 10, 15, 20];
+
+function loadRate() {
+  try {
+    const rate = Number(localStorage.getItem(RATE_KEY));
+    if (RATES.includes(rate)) return rate;
+  } catch { /* Storage may be disabled. */ }
+  return 1;
+}
+
+function saveRate(rate: number) {
+  try { localStorage.setItem(RATE_KEY, String(rate)); } catch { /* ignore */ }
+}
 
 function loadQuality() {
   try {
@@ -59,6 +75,7 @@ export function Player({
   favorited,
   onToggleFav,
   episodeControls,
+  nextEpisode,
 }: {
   src: string;
   startAt?: number;
@@ -72,8 +89,10 @@ export function Player({
   favorited?: boolean;
   onToggleFav?: () => void;
   episodeControls?: ReactNode;
+  nextEpisode?: { title: string; onPlay: () => void };
 }) {
   const casting = !!remote?.active || !!remote?.restoring;
+  const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -83,6 +102,8 @@ export function Player({
   const clickWait = useRef<number | null>(null);
   const lastVol = useRef(loadVol() || 0.8);
   const [paused, setPaused] = useState(true);
+  const pausedRef = useRef(true);
+  pausedRef.current = paused;
   const [t, setT] = useState(0);
   const [d, setD] = useState(0);
   const [buf, setBuf] = useState(0);
@@ -131,7 +152,17 @@ export function Player({
   const expectedDuration = useRef(0);
   const failureReported = useRef(false);
   const [loading, setLoading] = useState(true);
+  const [loadingShown, setLoadingShown] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [osd, setOsd] = useState<{ text: string; id: number } | null>(null);
+  const osdTimer = useRef<number | null>(null);
+  const [rate, setRate] = useState(loadRate);
+  const lastPointer = useRef("");
+  const lastTap = useRef(0);
+  const recovery = useRef({ media: 0, mediaAt: 0, network: 0, timer: 0 });
   const [show, setShow] = useState(true);
+  const showRef = useRef(true);
+  showRef.current = show;
   const [vol, setVol] = useState(() => loadVol());
   const [muted, setMuted] = useState(() => loadVol() === 0);
   const [volumeDraft, setVolumeDraft] = useState<number | null>(null);
@@ -217,6 +248,9 @@ export function Player({
     if (!usingWeb720) setLevels([]);
     setLevel(usingWeb720 ? -4 : -1);
     let hls: Hls | null = null;
+    window.clearTimeout(recovery.current.timer);
+    recovery.current = { media: 0, mediaAt: 0, network: 0, timer: 0 };
+    setNotice("");
     let nativeMetadata: (() => void) | undefined;
     const resume = qualityResume.current;
     qualityResume.current = null;
@@ -230,6 +264,8 @@ export function Player({
     };
     video.volume = vol;
     video.muted = muted;
+    video.defaultPlaybackRate = rate;
+    video.playbackRate = rate;
     if (isMp4) {
       video.src = playbackSrc;
       const onMeta = () => {
@@ -284,8 +320,32 @@ export function Player({
           begin(!usingWeb720 && preferred > 0 ? matching?.i ?? ls[0]?.i ?? -1 : -1);
         }
       });
+      hls.on(Hls.Events.FRAG_LOADED, () => {
+        if (!recovery.current.network) return;
+        recovery.current.network = 0;
+        setNotice("");
+      });
       hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (data.fatal) playbackFailed();
+        const instance = hls!;
+        if (!data.fatal || hlsRef.current !== instance || castingRef.current) return;
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && recoverMedia()) return;
+        const state = recovery.current;
+        const status = data.response?.code ?? 0;
+        const manifest = [Hls.ErrorDetails.MANIFEST_LOAD_ERROR, Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT,
+          Hls.ErrorDetails.MANIFEST_PARSING_ERROR].includes(data.details);
+        // Keep playing what is buffered while the same stream is retried. Rejected
+        // or expired URLs (4xx) and a broken manifest still need a fresh source.
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && !manifest && !(status >= 400 && status < 500)
+            && state.network < NETWORK_RETRIES.length) {
+          const delay = NETWORK_RETRIES[state.network++];
+          setNotice(`網路不穩，${delay} 秒後原地重試（第 ${state.network} 次），已緩衝的畫面會繼續播放`);
+          window.clearTimeout(state.timer);
+          state.timer = window.setTimeout(() => {
+            if (hlsRef.current === instance) instance.startLoad(video.currentTime);
+          }, delay * 1000);
+          return;
+        }
+        playbackFailed();
       });
       hlsRef.current = hls;
       hls.loadSource(playbackSrc);
@@ -299,6 +359,7 @@ export function Player({
       video.addEventListener("loadedmetadata", nativeMetadata, { once: true });
     }
     return () => {
+      window.clearTimeout(recovery.current.timer);
       if (nativeMetadata) video.removeEventListener("loadedmetadata", nativeMetadata);
       hls?.destroy();
       hlsRef.current = null;
@@ -306,6 +367,13 @@ export function Player({
     // vol/muted applied once when attaching; later changes go through applyVol
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src, startAt, startPaused, playbackSrc]);
+
+  useEffect(() => {
+    // Short stalls (seeking into the buffer, a quick segment) should not flash a pill.
+    if (!loading) { setLoadingShown(false); return; }
+    const timer = window.setTimeout(() => setLoadingShown(true), 400);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -328,9 +396,11 @@ export function Player({
       if (castingRef.current && !video.paused) video.pause();
       setT(video.currentTime);
       setD(video.duration || 0);
-      if (video.buffered.length) {
-        setBuf(video.buffered.end(video.buffered.length - 1));
+      let ahead = 0;
+      for (let i = 0; i < video.buffered.length; i++) {
+        if (video.buffered.start(i) <= video.currentTime + 0.5 && video.buffered.end(i) >= video.currentTime) ahead = video.buffered.end(i);
       }
+      setBuf(ahead);
       setPaused(video.paused);
       setLoading(video.readyState < 3 && !video.paused);
       if (!castingRef.current) {
@@ -353,7 +423,10 @@ export function Player({
     video.addEventListener("play", onTime);
     video.addEventListener("pause", onTime);
     const onWaiting = () => setLoading(true);
-    const onPlaying = () => setLoading(false);
+    const onPlaying = () => {
+      setLoading(false);
+      if (!recovery.current.network) setNotice("");
+    };
     const onVolume = () => {
       setVol(video.volume);
       setMuted(video.muted || video.volume === 0);
@@ -389,7 +462,7 @@ export function Player({
       if (casting) {
         if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
           e.preventDefault();
-          if (canSeek) seekTo((currentTime + (e.key === "ArrowRight" ? 10 : -10)) / duration);
+          seekBy(e.key === "ArrowRight" ? 10 : -10);
         } else if (e.key === " " || e.code === "Space" || e.key === "MediaPlayPause" || e.key === "Enter") {
           e.preventDefault();
           togglePlay();
@@ -407,15 +480,19 @@ export function Player({
         else if (e.key === "MediaPlay") void v.play();
         else v.paused ? void v.play() : v.pause();
       } else if (e.key === "ArrowRight") {
-        v.currentTime = Math.min(v.duration || 0, v.currentTime + 10);
+        e.preventDefault();
+        seekBy(10);
       } else if (e.key === "ArrowLeft") {
-        v.currentTime = Math.max(0, v.currentTime - 10);
+        e.preventDefault();
+        seekBy(-10);
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
-        applyVol((v.muted ? 0 : v.volume) + 0.05);
+        nudgeVolume(0.05);
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
-        applyVol((v.muted ? 0 : v.volume) - 0.05);
+        nudgeVolume(-0.05);
+      } else if (e.key === "<" || e.key === ">") {
+        stepRate(e.key === ">" ? 1 : -1);
       } else if (e.key === "f" || e.key === "F") {
         toggleFs();
       } else if (e.key === "m" || e.key === "M") {
@@ -538,17 +615,107 @@ export function Player({
     }
   }
 
+  function flash(text: string) {
+    setOsd({ text, id: Date.now() });
+    if (osdTimer.current) window.clearTimeout(osdTimer.current);
+    osdTimer.current = window.setTimeout(() => setOsd(null), 800);
+  }
+
+  function seekBy(delta: number) {
+    if (!canSeek) return;
+    if (casting) {
+      void remote?.control("seek", Math.max(0, Math.min(duration, currentTime + delta)));
+    } else {
+      const v = videoRef.current;
+      if (!v) return;
+      v.currentTime = Math.max(0, Math.min(v.duration || 0, v.currentTime + delta));
+    }
+    flash(`${delta > 0 ? "快轉" : "倒轉"} ${Math.abs(delta)} 秒`);
+    bumpUi();
+  }
+
+  function nudgeVolume(delta: number) {
+    const v = videoRef.current;
+    if (!v) return;
+    const next = Math.min(1, Math.max(0, (v.muted ? 0 : v.volume) + delta));
+    applyVol(next);
+    flash(`音量 ${Math.round(next * 100)}`);
+  }
+
+  function changeRate(next: number) {
+    setRate(next);
+    saveRate(next);
+    const v = videoRef.current;
+    if (v) {
+      v.defaultPlaybackRate = next;
+      v.playbackRate = next;
+    }
+    flash(`${next}x 速度`);
+  }
+
+  function stepRate(step: number) {
+    if (casting) return;
+    const index = Math.max(0, Math.min(RATES.length - 1, RATES.indexOf(rate) + step));
+    changeRate(RATES[index]);
+  }
+
+  function recoverMedia() {
+    const hls = hlsRef.current;
+    const state = recovery.current;
+    if (!hls || castingRef.current) return false;
+    const now = Date.now();
+    // The element and hls.js can both report one decode failure.
+    if (state.media && now - state.mediaAt < 1000) return true;
+    if (now - state.mediaAt > 60000) state.media = 0;
+    state.mediaAt = now;
+    if (state.media >= 2) return false;
+    if (state.media++ === 1) hls.swapAudioCodec();
+    setNotice("畫面解碼中斷，正在原地修復…");
+    hls.recoverMediaError();
+    return true;
+  }
+
   function bumpUi() {
     setShow(true);
     if (hideTimer.current) window.clearTimeout(hideTimer.current);
     hideTimer.current = window.setTimeout(() => {
-      if (!paused) setShow(false);
+      if (lastPointer.current === "mouse" && rootRef.current?.querySelector(".controls")?.matches(":hover")) bumpUi();
+      else if (!pausedRef.current) setShow(false);
     }, 2200);
+  }
+
+  function hideNow() {
+    if (pausedRef.current || castingRef.current || dragging.current) return;
+    if (hideTimer.current) window.clearTimeout(hideTimer.current);
+    setShow(false);
+  }
+
+  function onTap(e: MouseEvent<HTMLDivElement>) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const now = Date.now();
+    if (clickWait.current && now - lastTap.current < 300) {
+      window.clearTimeout(clickWait.current);
+      clickWait.current = null;
+      lastTap.current = 0;
+      if (x < 0.35) seekBy(-10);
+      else if (x > 0.65) seekBy(10);
+      else toggleFs();
+      return;
+    }
+    lastTap.current = now;
+    clickWait.current = window.setTimeout(() => {
+      clickWait.current = null;
+      // On touch, the first tap only reveals the controls.
+      if (!showRef.current && !pausedRef.current && !castingRef.current) bumpUi();
+      else togglePlay();
+    }, 300);
   }
 
   function onSurfaceClick(e: MouseEvent<HTMLDivElement>) {
     const el = e.target as HTMLElement;
-    if (el.closest(".controls")) return;
+    if (el.closest(".controls, .next-up")) return;
+    if (lastPointer.current === "touch") { onTap(e); return; }
     if (clickWait.current) {
       window.clearTimeout(clickWait.current);
       clickWait.current = null;
@@ -563,7 +730,7 @@ export function Player({
   function onSurfaceDblClick(e: MouseEvent<HTMLDivElement>) {
     e.preventDefault();
     const el = e.target as HTMLElement;
-    if (el.closest(".controls")) return;
+    if (el.closest(".controls, .next-up") || lastPointer.current === "touch") return;
     if (clickWait.current) {
       window.clearTimeout(clickWait.current);
       clickWait.current = null;
@@ -571,13 +738,36 @@ export function Player({
     toggleFs();
   }
 
-  function onWheel(e: WheelEvent<HTMLDivElement>) {
+  const wheelRef = useRef<(e: WheelEvent) => void>(() => {});
+  wheelRef.current = (e) => {
     if (casting) return;
     const v = videoRef.current;
     if (!v) return;
     e.preventDefault();
-    const cur = v.muted ? 0 : v.volume;
-    applyVol(cur + (e.deltaY < 0 ? 0.05 : -0.05));
+    nudgeVolume(e.deltaY < 0 ? 0.05 : -0.05);
+  };
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    // React attaches wheel listeners as passive, which ignores preventDefault
+    // and scrolls the page while the volume changes.
+    const onWheel = (e: WheelEvent) => wheelRef.current(e);
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  function releaseSelect(e: ChangeEvent<HTMLSelectElement>) {
+    // After a mouse pick, Space should pause rather than reopen the menu.
+    if (lastPointer.current === "mouse") e.currentTarget.blur();
+  }
+
+  function releaseFocus(e: PointerEvent<HTMLDivElement>) {
+    // A mouse click must not leave focus on a control, or Space re-presses it
+    // instead of pausing. Keyboard and TV remote focus is left untouched.
+    if (e.pointerType !== "mouse") return;
+    const control = (e.target as HTMLElement).closest<HTMLElement>("button, input[type='range']");
+    if (control) window.setTimeout(() => control.blur(), 0);
   }
 
   const shownT = scrub != null && duration ? scrub * duration : currentTime;
@@ -588,25 +778,30 @@ export function Player({
   const castQuality = new URLSearchParams(remote?.status?.content_id.split("?")[1] || "").get("nesthub") === "1"
     ? "最高 720p" : levels.length === 1 ? `${levels[0].h}p` : "投放自動";
 
+  const waiting = casting ? !!(remote?.busy || remote?.status?.buffering) : qualityBusy || (!qualityError && !playError && !notice && loadingShown);
+  const pill = casting ? (waiting ? "等待電視確認" : "") : qualityBusy ? "正在準備 720p…" : qualityError || playError || notice || (loadingShown ? "載入中" : "");
+  const nextWindow = Math.min(20, duration * 0.15);
+  const showNext = !!nextEpisode && !casting && duration > 30 && currentTime > 0 && duration - currentTime <= nextWindow;
+
   return (
     <div
+      ref={rootRef}
       className={`player ${show || isPaused || casting ? "show" : ""}`}
-      onMouseMove={bumpUi}
+      onPointerDown={(e) => { lastPointer.current = e.pointerType; }}
+      onPointerMove={(e) => { if (e.pointerType !== "touch") bumpUi(); }}
+      onMouseLeave={hideNow}
       onClick={onSurfaceClick}
       onDoubleClick={onSurfaceDblClick}
-      onWheel={onWheel}
     >
-      <video ref={videoRef} playsInline onResize={(e) => setVideoHeight(e.currentTarget.videoHeight)} onLoadedMetadata={(e) => setVideoHeight(e.currentTarget.videoHeight)} onPlay={() => { setPlayError(""); if (!castingRef.current) onPlaybackStarted?.(); }} onError={playbackFailed} />
-      {!casting && (qualityBusy || qualityError) ? <div className="loading-pill" role="status">{qualityBusy ? "正在準備 720p…" : qualityError}</div> : null}
-      {playError && !casting && !qualityBusy && !qualityError ? <div className="loading-pill" role="status">{playError}</div> : null}
+      <video ref={videoRef} playsInline onResize={(e) => setVideoHeight(e.currentTarget.videoHeight)} onLoadedMetadata={(e) => setVideoHeight(e.currentTarget.videoHeight)} onPlay={() => { setPlayError(""); bumpUi(); if (!castingRef.current) onPlaybackStarted?.(); }} onError={() => { if (!recoverMedia()) playbackFailed(); }} />
       {isPaused ? (
         <div className="center-play">
           <span>▶</span>
         </div>
       ) : null}
-      {!qualityBusy && !qualityError && (casting ? remote?.busy || remote?.status?.buffering : loading) ? <div className="loading-pill">{casting ? "等待電視確認" : "載入中"}</div> : null}
+      {pill ? <div className={`loading-pill${waiting ? " spin" : ""}`} role="status">{pill}</div> : null}
       <div className="overlay">
-        <div className="controls">
+        <div className="controls" onPointerUp={releaseFocus}>
           <div
             className="seek"
             ref={barRef}
@@ -674,13 +869,23 @@ export function Player({
               <span className="times">{Math.round(shownVol * 100)}</span>
             </div> : <span className="times">{remote?.uncertain ? "音量暫不可用" : remote?.status?.can_set_volume === false ? "音量請用遙控器" : "讀取投放音量…"}</span>}
             <span className="spacer" />
+            {!casting ? <select
+              className="field rate"
+              aria-label="播放速度"
+              title="播放速度（< 和 > 鍵）"
+              value={rate}
+              onChange={(e) => { changeRate(Number(e.target.value)); releaseSelect(e); }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {RATES.map((r) => <option key={r} value={r}>{r === 1 ? "1x" : `${r}x`}</option>)}
+            </select> : null}
             {casting ? <span className="quality-status" aria-label="投放畫質" title="投放端處理畫質；本機畫質選單只適用於本機播放">{castQuality}</span> : !isMp4 && Hls.isSupported() ? <select
               className="field"
               aria-label="播放畫質"
               title="記住畫質供下次播放使用；720p 轉換需要電腦處理，部分片源不支援"
               disabled={qualityBusy}
               value={level}
-              onChange={(e) => changeLevel(Number(e.target.value))}
+              onChange={(e) => { changeLevel(Number(e.target.value)); releaseSelect(e); }}
               onClick={(e) => e.stopPropagation()}
             >
               <option value={-1}>{levels.length > 1 ? "自動" : !usingWeb720 && videoHeight ? `來源 ${videoHeight}p` : "來源畫質"}</option>
@@ -711,6 +916,12 @@ export function Player({
           {episodeControls}
         </div>
       </div>
+      {showNext ? (
+        <button type="button" className="next-up" data-tv="1" onClick={(e) => { e.stopPropagation(); nextEpisode!.onPlay(); }}>
+          下一集 ▶ <span>{nextEpisode!.title}</span>
+        </button>
+      ) : null}
+      {osd ? <div key={osd.id} className="osd" aria-live="polite">{osd.text}</div> : null}
     </div>
   );
 }

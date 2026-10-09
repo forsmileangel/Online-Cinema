@@ -50,6 +50,57 @@ class ChinaqTests(unittest.TestCase):
             listing = chinaq.search("豐臣")
         self.assertEqual([c.id for c in listing.items], ["jp-202614255"])
 
+    def test_search_matches_script_variants_and_ascii_case(self):
+        from backend.models import Card
+        cards = [Card(id=str(i), title=title, cover="", source="chinaq")
+                 for i, title in enumerate(["斗羅大陸", "月光裏的你", "長相思", "ABC-123"])]
+        with patch.object(chinaq, "_get", return_value="catalog"), patch.object(chinaq, "parse_cards", return_value=cards):
+            for query, expected in [("鬥羅大陸", 0), ("裡", 1), ("长相思", 2), ("abc-123", 3)]:
+                with self.subTest(query=query):
+                    listing = chinaq.search(query)
+                    self.assertEqual(listing.items, [cards[expected]])
+                    self.assertEqual(listing.title, query)
+
+    def test_title_keys_are_reused_until_catalog_expires(self):
+        from backend import zh
+        cards = chinaq.parse_cards(load("chinaq_all.html"))
+        with patch.object(chinaq, "_get", return_value="catalog") as get, \
+             patch.object(chinaq, "parse_cards", return_value=cards), \
+             patch.object(chinaq.time, "monotonic", return_value=100) as clock, \
+             patch.object(zh, "search_key", wraps=zh.search_key) as convert:
+            chinaq.browse("all")
+            self.assertEqual(convert.call_count, len(cards))
+            chinaq.search("獵罪")
+            chinaq.search("豐臣")
+            chinaq.browse("jp")
+            self.assertEqual(convert.call_count, len(cards) + 2)
+            get.assert_called_once_with("/all.html")
+            clock.return_value = 100 + chinaq._ALL_TTL + 1
+            chinaq.search("獵罪")
+            self.assertEqual(convert.call_count, 2 * len(cards) + 3)
+            self.assertEqual(get.call_count, 2)
+
+    def test_normalized_search_keeps_pagination(self):
+        from backend.models import Card
+        cards = [Card(id=str(i), title="月光裏的你", cover="", source="chinaq") for i in range(47)]
+        with patch.object(chinaq, "_get", return_value="catalog"), patch.object(chinaq, "parse_cards", return_value=cards):
+            first, second = chinaq.search("裡"), chinaq.search("裡", page=2)
+        self.assertEqual((len(first.items), first.pages, first.has_next), (24, 2, True))
+        self.assertEqual((len(second.items), second.pages, second.has_next), (23, 2, False))
+
+    def test_concurrent_searches_build_title_keys_once(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from backend import zh
+        cards = chinaq.parse_cards(load("chinaq_all.html"))
+        with patch.object(chinaq, "_get", return_value="catalog") as get, \
+             patch.object(chinaq, "parse_cards", return_value=cards), \
+             patch.object(zh, "search_key", wraps=zh.search_key) as convert:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                results = list(pool.map(chinaq.search, ["豐臣"] * 16))
+        self.assertTrue(all(result.items for result in results))
+        self.assertEqual(convert.call_count, len(cards) + 16)
+        get.assert_called_once_with("/all.html")
+
     def test_browse_unknown_rejected(self):
         with self.assertRaises(UnsafeURL):
             chinaq.browse("nope")

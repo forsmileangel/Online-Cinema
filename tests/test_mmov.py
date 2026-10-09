@@ -20,6 +20,9 @@ class MMOVTests(unittest.TestCase):
         mmov._pages.clear()
         mmov._html.clear()
         mmov._cooldowns.clear()
+        mmov._search_finished = 0.0
+        p = patch.object(mmov, '_SEARCH_INTERVAL', 0)
+        p.start(); self.addCleanup(p.stop)
         p = patch.object(security, '_assert_not_private')
         p.start(); self.addCleanup(p.stop)
         for name in ('_extra_media_hosts', '_extra_media_sources'):
@@ -62,6 +65,54 @@ class MMOVTests(unittest.TestCase):
     def test_search_repeated_first_page_does_not_offer_next(self):
         with patch.object(mmov, '_get', return_value=fixture('search')):
             self.assertFalse(mmov.search('大刑伺候').has_next)
+
+    def test_empty_search_retries_normalized_traditional(self):
+        from urllib.parse import quote
+        for query, normalized in [('鬥羅大陸', '斗羅大陸'), ('庆余年', '慶餘年')]:
+            with self.subTest(query=query), patch.object(mmov, '_get', side_effect=['', fixture('search')]) as get:
+                result = mmov.search(query)
+            self.assertTrue(result.items)
+            self.assertEqual(result.title, query)
+            self.assertEqual([call.args[0] for call in get.call_args_list],
+                             ['/vodsearch/' + quote(q, safe='') + '-------------.html' for q in (query, normalized)])
+            self.assertTrue(all(call.kwargs == {'operation': 'search'} for call in get.call_args_list))
+            self.assertIn('search:' + query, mmov._pages)
+            self.assertIn('search:' + normalized, mmov._pages)
+
+    def test_successful_original_search_does_not_retry(self):
+        with patch.object(mmov, '_get', return_value=fixture('search')) as get:
+            result = mmov.search('鬥羅大陸')
+        self.assertTrue(result.items)
+        self.assertEqual(result.title, '鬥羅大陸')
+        get.assert_called_once()
+
+    def test_unchanged_empty_search_does_not_retry(self):
+        for query in ('慶餘年', 'Neutral-123'):
+            with self.subTest(query=query), patch.object(mmov, '_get', return_value='') as get:
+                self.assertFalse(mmov.search(query).items)
+            get.assert_called_once()
+
+    def test_busy_search_is_not_retried(self):
+        busy = security.SiteBusy('MMOV', 429, 30)
+        with patch.object(mmov, '_get', side_effect=busy) as get:
+            with self.assertRaises(security.SiteBusy) as caught:
+                mmov.search('鬥羅大陸')
+        self.assertIs(caught.exception, busy)
+        get.assert_called_once()
+
+    def test_normalized_search_uses_its_own_next_page_links(self):
+        from urllib.parse import quote
+        path = '/vodsearch/' + quote('斗羅大陸', safe='') + '----------2---.html'
+        first = fixture('search') + f'<ul class="stui-page"><a href="{path}">下一頁</a></ul>'
+        second = fixture('search').replace('515042', '515043')
+        with patch.object(mmov, '_get', side_effect=['', first, second]) as get:
+            self.assertTrue(mmov.search('鬥羅大陸').has_next)
+            listing = mmov.search('鬥羅大陸', page=2)
+            self.assertEqual(listing.items[0].id, '515043')
+            self.assertEqual((listing.page, listing.title, listing.has_next), (2, '鬥羅大陸', False))
+            self.assertFalse(mmov.search('鬥羅大陸', page=3).items)
+        self.assertEqual(get.call_count, 3)
+        self.assertEqual(get.call_args.args[0], path)
 
     def test_third_route_succeeds_and_is_preferred_on_next_episode(self):
         with patch.object(mmov, '_get', return_value=fixture('detail')), patch.object(mmov, '_resolve', side_effect=[ValueError('TLS'), TimeoutError(), '/api/hls?u=good']) as resolve:
@@ -130,6 +181,32 @@ class MMOVTests(unittest.TestCase):
             self.assertEqual(mmov._get('/one', operation='search'), 'ok')
             self.assertEqual(mmov._get('/vod/123.html', operation='video'), 'ok')
         self.assertEqual(fetch.call_count, 3)
+
+    def test_uncached_searches_are_spaced_but_cache_hits_are_immediate(self):
+        now = [100.0]
+        response = Mock(iter_content=Mock(return_value=[b'<html>ok</html>']))
+        def sleep(delay):
+            now[0] += delay
+        with patch.object(mmov, '_SEARCH_INTERVAL', 5.5), patch.object(mmov.time, 'monotonic', side_effect=lambda: now[0]), \
+                patch.object(mmov.time, 'sleep', side_effect=sleep) as wait, patch.object(http_client, 'fetch_bytes', return_value=response) as fetch:
+            mmov._get('/one', operation='search')
+            mmov._get('/two', operation='search')
+            mmov._get('/one', operation='search')
+            mmov._get('/vod/123.html', operation='video')
+        wait.assert_called_once_with(5.5)
+        self.assertEqual(fetch.call_count, 3)
+
+    def test_soft_404_stops_fallback_and_enters_search_cooldown(self):
+        response = Mock(iter_content=Mock(return_value=[b'<title>404</title><h3>404,Data not found!</h3>']))
+        with patch.object(http_client, 'fetch_bytes', return_value=response) as fetch:
+            for query in ['鬥羅大陸', '慶餘年']:
+                with self.assertRaises(security.SiteBusy):
+                    mmov.search(query)
+        fetch.assert_called_once()
+        self.assertFalse(mmov._html)
+        self.assertFalse(mmov._inflight)
+        self.assertFalse(mmov._pages)
+        self.assertFalse(mmov._search_lock.locked())
 
     def test_registration_history_and_explicit_episode_seconds(self):
         self.assertIn('mmov', cast_session.SERIES_SOURCES)

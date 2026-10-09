@@ -42,6 +42,38 @@ class DramaqTests(unittest.TestCase):
         self.assertEqual(listing.items[0].id, "202635531")
         self.assertEqual(listing.items[0].title, "挑情醜聞")
 
+    def test_search_simplifies_query_and_preserves_title(self):
+        from urllib.parse import quote
+        with patch.object(dramaq, "_get", return_value=load("dramaq_search.html")) as get:
+            result = dramaq.search("慶餘年")
+        get.assert_called_once_with("/search?q=" + quote("庆余年"))
+        self.assertTrue(result.items)
+        self.assertEqual(result.title, "慶餘年")
+
+    def test_empty_simplified_search_retries_original(self):
+        from urllib.parse import quote
+        with patch.object(dramaq, "_get", side_effect=["", load("dramaq_search.html")]) as get:
+            result = dramaq.search("慶餘年")
+        self.assertEqual([call.args[0] for call in get.call_args_list],
+                         ["/search?q=" + quote(q) for q in ("庆余年", "慶餘年")])
+        self.assertTrue(result.items)
+        self.assertEqual(result.title, "慶餘年")
+
+    def test_unchanged_empty_search_sends_one_request(self):
+        for query in ("庆余年", "ABC-123"):
+            with self.subTest(query=query), patch.object(dramaq, "_get", return_value="") as get:
+                self.assertFalse(dramaq.search(query).items)
+            get.assert_called_once()
+
+    def test_busy_search_is_not_retried(self):
+        from backend.security import SiteBusy
+        busy = SiteBusy("DramaQ", 429, 30)
+        with patch.object(dramaq, "_get", side_effect=busy) as get:
+            with self.assertRaises(SiteBusy) as caught:
+                dramaq.search("慶餘年")
+        self.assertIs(caught.exception, busy)
+        get.assert_called_once()
+
     def test_fetch_video_fills_episode_count_and_uses_first_https_stream(self):
         def fake_get(path: str) -> str:
             if path.startswith("/detail/"):

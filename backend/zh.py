@@ -27,5 +27,15 @@ def to_traditional(text: str) -> str:
     return _convert(text, "s2tw")
 
 
+def normalize_traditional(text: str) -> str:
+    """Taiwan Traditional form with script variants folded (鬥→斗, 裏→裡)."""
+    return to_traditional(to_simplified(text))
+
+
+def search_key(text: str) -> str:
+    """Script- and variant-insensitive key for local title matching."""
+    return to_simplified(text).casefold()
+
+
 def variants(text: str) -> list[str]:
     return list(dict.fromkeys([text, to_simplified(text), to_traditional(text)]))

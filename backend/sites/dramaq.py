@@ -10,7 +10,7 @@ from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
-from .. import http_client
+from .. import http_client, zh
 from ..hls_proxy import proxied_media
 from ..models import Card, Episode, Listing, PickChip, PickGroup, Tag, VideoDetail
 from ..security import (
@@ -231,7 +231,10 @@ def browse(kind: str, slug: str | None = None, page: int = 1) -> Listing:
 def search(query: str, page: int = 1) -> Listing:
     q = safe_search_query(query)
     page = max(1, min(int(page), 50))
-    items = parse_cards(_get(f"/search?q={quote(q)}"))
+    simplified = zh.to_simplified(q)
+    items = parse_cards(_get(f"/search?q={quote(simplified)}"))
+    if not items and simplified != q:
+        items = parse_cards(_get(f"/search?q={quote(q)}"))
     return _slice(items, page, q)
 
 

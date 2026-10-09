@@ -10,7 +10,7 @@ from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
-from .. import http_client
+from .. import http_client, zh
 from ..hls_proxy import dlna_media_url, proxied_media
 from ..models import Card, Episode, Listing, PickChip, PickGroup, Tag, VideoDetail
 from ..security import (
@@ -50,7 +50,7 @@ HOME_KIND = {
 }
 
 _all_lock = threading.Lock()
-_all_memo: tuple[float, list[Card]] | None = None
+_all_memo: tuple[float, list[Card], list[str]] | None = None
 
 
 def _get(path: str) -> str:
@@ -173,16 +173,15 @@ def parse_home_sections(html: str) -> list[tuple[str, str, list[Card]]]:
     return rows
 
 
-def _all_cards() -> list[Card]:
+def _all_catalog() -> tuple[list[Card], list[str]]:
     global _all_memo
-    now = time.monotonic()
+    # Keep cards and keys in one snapshot; concurrent searches share one rebuild.
     with _all_lock:
-        if _all_memo and now - _all_memo[0] < _ALL_TTL:
-            return _all_memo[1]
-    items = parse_cards(_get("/all.html"))
-    with _all_lock:
-        _all_memo = (time.monotonic(), items)
-    return items
+        if not _all_memo or time.monotonic() - _all_memo[0] >= _ALL_TTL:
+            items = parse_cards(_get("/all.html"))
+            keys = [zh.search_key(card.title or "") for card in items]
+            _all_memo = (time.monotonic(), items, keys)
+        return _all_memo[1], _all_memo[2]
 
 
 def _slice(items: list[Card], page: int, title: str) -> Listing:
@@ -228,18 +227,19 @@ def browse(kind: str, slug: str | None = None, page: int = 1) -> Listing:
     if kind == "new":
         return _slice(parse_cards(_get("/new.html")), page, "最新上架")
     if kind == "all":
-        return _slice(_all_cards(), page, "全部戲劇")
+        return _slice(_all_catalog()[0], page, "全部戲劇")
     if kind in REGIONS:
         prefix = kind + "-"
-        items = [c for c in _all_cards() if c.id.startswith(prefix)]
+        items = [c for c in _all_catalog()[0] if c.id.startswith(prefix)]
         return _slice(items, page, REGIONS[kind])
     raise UnsafeURL("unknown category")
 
 
 def search(query: str, page: int = 1) -> Listing:
     q = safe_search_query(query)
-    needle = q.casefold()
-    items = [c for c in _all_cards() if needle in (c.title or "").casefold()]
+    needle = zh.search_key(q)
+    cards, keys = _all_catalog()
+    items = [card for card, key in zip(cards, keys) if needle in key]
     return _slice(items, page, q)
 
 

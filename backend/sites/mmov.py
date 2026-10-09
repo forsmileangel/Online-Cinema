@@ -11,7 +11,7 @@ from urllib.parse import quote, unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
-from .. import http_client
+from .. import http_client, zh
 from ..hls_proxy import dlna_media_url, proxied_media
 from ..models import Card, Episode, Listing, PickChip, PickGroup, Tag, VideoDetail
 from ..security import SiteBusy, SourceUnavailable, UnsafeURL, assert_https_url, remember_media_host, safe_search_query
@@ -26,6 +26,9 @@ GENRES = {"6": "動作片", "7": "喜劇片", "8": "愛情片", "9": "科幻片"
           "13": "陸劇", "15": "韓劇", "35": "日劇", "34": "港劇", "36": "泰劇",
           "37": "越劇", "16": "歐美劇", "33": "海外劇"}
 _lock = threading.RLock()
+_search_lock = threading.Lock()
+_SEARCH_INTERVAL = 5.5
+_search_finished = 0.0
 _html: OrderedDict[str, tuple[float, str]] = OrderedDict()
 _inflight: dict[str, Future] = {}
 _cooldowns: dict[str, tuple[float, SiteBusy]] = {}
@@ -46,6 +49,7 @@ def _source_url(url: str, _parent: str = "") -> str:
 
 
 def _get(url: str, *, deadline: float | None = None, operation: str = "browse") -> str:
+    global _search_finished
     url = _source_url(urljoin(ORIGIN, url))
     deadline = deadline or time.monotonic() + 20
     with _lock:
@@ -60,7 +64,21 @@ def _get(url: str, *, deadline: float | None = None, operation: str = "browse") 
             pending = _inflight[url] = Future()
     if not owner:
         return pending.result(timeout=max(0.01, deadline - time.monotonic()))
+    search_locked = False
     try:
+        if operation == "search":
+            search_locked = _search_lock.acquire(timeout=max(0.01, deadline - time.monotonic()))
+            if not search_locked:
+                raise TimeoutError("MMOV 搜尋等待逾時，請重試")
+            with _lock:
+                if _cooldowns.get(operation, (0, None))[0] > time.monotonic():
+                    raise _cooldowns[operation][1]
+            # Consecutive searches can return HTTP 200 with a short 404 page.
+            delay = _SEARCH_INTERVAL - (time.monotonic() - _search_finished)
+            if delay > 0:
+                if time.monotonic() + delay >= deadline:
+                    raise TimeoutError("MMOV 搜尋等待逾時，請重試")
+                time.sleep(delay)
         left = deadline - time.monotonic()
         if left <= 0:
             raise TimeoutError("MMOV 解析逾時，請重試")
@@ -76,6 +94,8 @@ def _get(url: str, *, deadline: float | None = None, operation: str = "browse") 
             text = raw.decode("utf-8", "replace")
         finally:
             http_client.close_response(response)
+        if operation == "search" and re.search(r"<title>\s*404\s*</title>", text, re.I) and "Data not found" in text:
+            raise SiteBusy("MMOV 電影線上看", 503, 30)
         with _lock:
             _html[url] = (time.monotonic() + (30 if operation == "search" else 120), text)
             _html.move_to_end(url)
@@ -91,6 +111,9 @@ def _get(url: str, *, deadline: float | None = None, operation: str = "browse") 
         pending.set_exception(exc)
         raise
     finally:
+        if search_locked:
+            _search_finished = time.monotonic()
+            _search_lock.release()
         with _lock:
             _inflight.pop(url, None)
 
@@ -194,7 +217,12 @@ def browse(kind: str, slug: str | None = None, page: int = 1) -> Listing:
 
 def search(query: str, page: int = 1) -> Listing:
     query = safe_search_query(query)
-    return _listing("search:" + query, "/vodsearch/" + quote(query, safe="") + "-------------.html", page, query, search=True)
+    result = _listing("search:" + query, "/vodsearch/" + quote(query, safe="") + "-------------.html", page, query, search=True)
+    if not result.items:
+        normalized = zh.normalize_traditional(query)
+        if normalized != query:
+            result = _listing("search:" + normalized, "/vodsearch/" + quote(normalized, safe="") + "-------------.html", page, query, search=True)
+    return result
 
 
 def _episodes(soup: BeautifulSoup, video_id: str):

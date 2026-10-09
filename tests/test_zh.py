@@ -19,6 +19,17 @@ class ChineseVariantTests(unittest.TestCase):
         self.assertEqual(zh.to_traditional("受众"), "受眾")
         self.assertEqual(zh.to_traditional("里面"), "裡面")
 
+    def test_normalize_traditional_folds_variants_and_simplified_input(self):
+        self.assertEqual(zh.normalize_traditional("鬥羅大陸"), "斗羅大陸")
+        self.assertEqual(zh.normalize_traditional("裏面"), "裡面")
+        self.assertEqual(zh.normalize_traditional("庆余年"), "慶餘年")
+        self.assertEqual(zh.normalize_traditional("ABC-123"), "ABC-123")
+
+    def test_search_key_ignores_script_variants_and_case(self):
+        for left, right in [("鬥羅大陸", "斗罗大陆"), ("裡", "裏"), ("长相思", "長相思"), ("ABC-123", "abc-123")]:
+            with self.subTest(left=left, right=right):
+                self.assertEqual(zh.search_key(left), zh.search_key(right))
+
     def test_lazy_converters_are_reused_safely_across_threads(self):
         from opencc import OpenCC
         with patch.object(zh, "_converters", {}), patch("opencc.OpenCC", wraps=OpenCC) as factory:

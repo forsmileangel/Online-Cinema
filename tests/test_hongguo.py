@@ -88,5 +88,48 @@ class HongguoTests(unittest.TestCase):
         self.assertEqual(listing.title, "宴律")
 
 
+    def test_search_simplifies_query_and_preserves_original_title(self):
+        from urllib.parse import quote
+        with patch.object(hongguo, "_get_json", return_value={"total": 100, "list": [{"id": 1, "name": "Neutral"}]}) as get:
+            result = hongguo.search("總裁", page=2)
+        get.assert_called_once_with(f"/index.php/ajax/suggest?mid=1&wd={quote('总裁')}&limit=50&page=2")
+        self.assertEqual(result.title, "總裁")
+
+    def test_empty_simplified_search_retries_original(self):
+        from urllib.parse import parse_qs, urlparse
+        for empty in ({"total": 0, "list": []}, {"total": 10, "list": []}):
+            with patch.object(hongguo, "_get_json", side_effect=[empty, {"total": 1, "list": [{"id": 1}]}]) as get:
+                self.assertEqual(len(hongguo.search("總裁").items), 1)
+            self.assertEqual([parse_qs(urlparse(c.args[0]).query)["wd"][0] for c in get.call_args_list], ["总裁", "總裁"])
+
+    def test_covers_follow_the_hosts_the_site_publishes(self):
+        from urllib.parse import parse_qs, urlparse
+        from backend import security
+        with patch.object(security.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("8.8.8.8", 443))]), \
+             patch.object(security, "_public_hosts", {}):
+            def upstream(raw):
+                proxied = hongguo._cover(raw)
+                return parse_qs(urlparse(proxied).query)["u"][0] if proxied else ""
+            # Relative uploads live on the site itself, not on img.picbf.com.
+            self.assertEqual(upstream("/upload/vod/20260819-1/a.jpg"), hongguo.ORIGIN + "/upload/vod/20260819-1/a.jpg")
+            for url in ("https://img.picbf.com/upload/vod/a.jpg", "https://p.bfvp26.com/upload/vod/a.jpg",
+                        "https://img.bfzypic.com/upload/vod/a.jpg", "https://pub2.bfzy.tv/upload/vod/a.jpg",
+                        "https://hongniuzyimage.com/cover/a.jpg", "https://image.tmdb.org/t/p/w600/a.jpg"):
+                with self.subTest(url=url):
+                    self.assertEqual(upstream(url), url)
+            for url in ("https://evil.test/a.jpg", "https://bfvp26.com.evil.test/a.jpg",
+                        "/template/conch/asset/img/load.gif", "http://img.picbf.com/a.jpg"):
+                with self.subTest(url=url):
+                    self.assertEqual(upstream(url), "")
+        self.assertTrue(hongguo.is_cover_host("p.bfvp26.com"))
+        self.assertFalse(hongguo.is_cover_host("notbfvp26.com"))
+
+    def test_unchanged_keyword_sends_one_request(self):
+        for query in ("总裁", "ABC-123"):
+            with patch.object(hongguo, "_get_json", return_value={"total": 0, "list": []}) as get:
+                hongguo.search(query)
+            get.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

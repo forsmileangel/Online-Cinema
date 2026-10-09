@@ -9,7 +9,7 @@ from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
-from .. import http_client
+from .. import http_client, zh
 from ..hls_proxy import proxied_media
 from ..models import Card, Episode, Listing, PickChip, PickGroup, Tag, VideoDetail
 from ..security import (
@@ -24,6 +24,9 @@ from ..security import (
 
 ORIGIN = "https://www.hongguoapp.cn"
 HOSTS = {"hongguoapp.cn", "www.hongguoapp.cn"}
+# Cover hosts the site publishes; keep in sync with settings.IMAGE_HOSTS.
+COVER_ROOTS = ("hongguoapp.cn", "picbf.com", "bfvp26.com", "bfzypic.com", "bfzy.tv",
+               "hongniuzyimage.com", "image.tmdb.org", "wangwangzyimg.com")
 DETAIL_RE = re.compile(r"/voddetail/(\d+)\.html")
 PLAY_RE = re.compile(r"/vodplay/(\d+)-1-(\d+)\.html")
 TYPE_ID = "51"
@@ -68,18 +71,21 @@ def _get(path: str) -> str:
         raise
 
 
+def is_cover_host(host: str) -> bool:
+    return any(host == root or host.endswith("." + root) for root in COVER_ROOTS)
+
+
 def _cover(url: str) -> str:
     u = (url or "").strip()
     if u.startswith("//"):
         u = "https:" + u
     if u.startswith("/"):
-        if u.startswith("/upload/"):
-            u = "https://img.picbf.com" + u
-        else:
-            u = ORIGIN + u
+        # Relative /upload/ covers are served by the site itself; img.picbf.com
+        # only has the ones the site publishes with an absolute picbf URL.
+        u = ORIGIN + u
     if not u.startswith("https://"):
         return ""
-    if "placeholder" in u or "load.gif" in u or "qrserver" in u or "tmdb.org" in u:
+    if "placeholder" in u or "load.gif" in u or "qrserver" in u:
         return ""
     if "?" in u and "picbf.com" in u:
         u = u.split("?", 1)[0]
@@ -87,7 +93,7 @@ def _cover(url: str) -> str:
         assert_image_url(u)
     except UnsafeURL:
         host = (urlparse(u).hostname or "").lower()
-        if not (host.endswith("picbf.com") or host.endswith("hongguoapp.cn") or host.endswith("wangwangzyimg.com")):
+        if not is_cover_host(host):
             return ""
     return "/api/img?u=" + quote(u, safe="")
 
@@ -336,7 +342,10 @@ def _get_json(path: str) -> dict:
 def search(query: str, page: int = 1) -> Listing:
     q = safe_search_query(query)
     page = max(1, min(int(page), 50))
-    data = _get_json(f"/index.php/ajax/suggest?mid=1&wd={quote(q)}&limit=50&page={page}")
+    simplified = zh.to_simplified(q)
+    data = _get_json(f"/index.php/ajax/suggest?mid=1&wd={quote(simplified)}&limit=50&page={page}")
+    if simplified != q and (data.get("total") in (0, "0") or not data.get("list")):
+        data = _get_json(f"/index.php/ajax/suggest?mid=1&wd={quote(q)}&limit=50&page={page}")
     docs = data.get("list") if isinstance(data, dict) else None
     items: list[Card] = []
     seen: set[str] = set()

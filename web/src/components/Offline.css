@@ -67,3 +67,50 @@
   cursor: inherit;
 }
 .offline-download-footer { padding-top: 8px; border-top: 1px solid var(--line); }
+/* Library page and download rows */
+.dl-summary { font-size: 16px; margin: 4px 0 8px; }
+.dl-cleanup { margin: 12px 0 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.dl-cleanup summary { cursor: pointer; }
+.dl-cleanup p { margin: 6px 0; }
+.dl-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.dl-confirm { margin: 12px 0; padding: 16px; border: 1px solid var(--danger); border-radius: 8px; }
+.dl-section { margin-top: 28px; }
+.dl-section > h2 { font-size: 20px; margin: 0 0 8px; }
+.dl-group h3 { font-size: 17px; margin: 16px 0 4px; }
+.dl-pick { display: flex; gap: 12px; align-items: center; }
+.dl-pick .dl-row { flex: 1; }
+.dl-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.dl-name { overflow-wrap: anywhere; }
+.dl-state.is-error { color: var(--danger); }
+.dl-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.dl-bar {
+  width: min(420px, 100%);
+  height: 6px;
+  overflow: hidden;
+  background: var(--line);
+  border-radius: 3px;
+}
+.dl-bar span { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .6s ease; }
+.dl-bar.is-preparing span { background: var(--ok); }
+.dl-bar.is-paused span { background: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .dl-bar span { transition: none; } }

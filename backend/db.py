@@ -177,12 +177,16 @@ def get_history_item(video_id: str, source: str = "hongguo") -> dict | None:
 
 
 def list_history(limit: int = 40, source: str | None = None) -> list[dict]:
-    limit = max(1, min(int(limit), 80))
-    rows = connect().execute(
-        "SELECT video_id, title, cover, position_sec, duration_sec, updated_at, episode_id "
-        "FROM history ORDER BY updated_at DESC LIMIT ?",
-        (limit * 2,),
-    ).fetchall()
+    limit = max(1, min(int(limit), 1000))
+    sql = "SELECT video_id, title, cover, position_sec, duration_sec, updated_at, episode_id FROM history"
+    args: list = []
+    if source:
+        # Filter in SQL: scanning only the newest rows overall let other sources
+        # crowd this one out of 繼續觀看. Every key carries a "source:" prefix.
+        prefix = normalize_source(source) + ":"
+        sql += " WHERE substr(video_id, 1, ?) = ?"
+        args += [len(prefix), prefix]
+    rows = connect().execute(sql + " ORDER BY updated_at DESC LIMIT ?", (*args, limit * 2)).fetchall()
     out = []
     want = normalize_source(source) if source else None
     for r in rows:
@@ -196,6 +200,11 @@ def list_history(limit: int = 40, source: str | None = None) -> list[dict]:
         if len(out) >= limit:
             break
     return out
+
+
+def remove_history(video_id: str, source: str = "hongguo") -> None:
+    connect().execute("DELETE FROM history WHERE video_id = ?", (store_id(source, video_id),))
+    connect().commit()
 
 
 def clear_history() -> None:

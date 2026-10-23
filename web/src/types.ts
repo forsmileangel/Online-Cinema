@@ -55,6 +55,23 @@ export type VideoDetail = {
   episode_id?: string;
 };
 
+export type SourceInfo = { id: string; label: string; group?: string };
+
+export type HistoryItem = {
+  video_id: string;
+  source: string;
+  title: string;
+  cover: string;
+  position_sec: number;
+  duration_sec: number;
+  updated_at: number;
+  episode_id?: string | null;
+};
+
+export type MultiResult = { source: string; ok: boolean; listing?: Listing; error?: string };
+/** The same show on another source: its episode numbers paired with episode ids. */
+export type Alternative = { source: string; label: string; id: string; title: string; count: number; episodes: [number, string][] };
+
 export type Settings = {
   source?: string;
   theme?: string;
@@ -63,5 +80,5 @@ export type Settings = {
   lan_ips?: string[];
   tv_code?: string;
   tv_url?: string;
-  sources?: { id: string; label: string }[];
+  sources?: SourceInfo[];
 };

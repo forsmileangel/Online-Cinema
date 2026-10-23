@@ -17,6 +17,7 @@ from ..hls_proxy import dlna_media_url, proxied_media
 from ..models import Card, Episode, Listing, PickChip, PickGroup, Tag, VideoDetail
 from ..security import (
     SiteBusy,
+    SourceUnavailable,
     UnsafeURL,
     assert_image_url,
     safe_search_query,
@@ -64,6 +65,9 @@ _search_memo: OrderedDict[tuple[str, int], tuple[float, Listing]] = OrderedDict(
 _search_links: dict[str, tuple[float, dict[int, str]]] = {}
 _search_cooldown: tuple[float, SiteBusy] | None = None
 _SEARCH_TTL = 30.0
+# Every Gimy search URL (/find/, ajax suggest, provide API) sits behind a Cloudflare
+# browser check this app cannot pass, so a 403 there will not clear by retrying.
+_SEARCH_BLOCKED = "Gimy 的搜尋目前被站方的 Cloudflare 驗證擋住，App 內無法搜尋；請改用其他影劇來源，或從 Gimy 首頁、分類找片。"
 
 
 def _get(path: str, *, timeout: float = 25) -> str:
@@ -255,7 +259,7 @@ def _remember_cards(cards: list[Card]) -> None:
         _hot_memo = (now, list(merged.values())[-500:])
 
 
-def _cached_search(q: str, page: int) -> Listing | None:
+def _cached_search(q: str, page: int, *, blocked: bool = False) -> Listing | None:
     with _hot_lock:
         cards = list(_hot_memo[1]) if _hot_memo and time.monotonic() - _hot_memo[0] < _HOT_TTL else []
     if not cards:
@@ -265,7 +269,20 @@ def _cached_search(q: str, page: int) -> Listing | None:
     pages = max(1, (len(items) + 23) // 24)
     return Listing(items=items[start:start + 24], page=page, has_next=page < pages,
                    title=q, pages=pages if pages > 1 else None,
-                   notice="來源搜尋暫時無法使用，僅搜尋已載入片單；結果不代表完整片庫。")
+                   notice=("Gimy 的搜尋被站方驗證擋住，" if blocked else "來源搜尋暫時無法使用，")
+                   + "僅搜尋已載入片單；結果不代表完整片庫。")
+
+
+def _search_refused(q: str, page: int, error: SiteBusy) -> Listing:
+    """Loaded-catalog matches when Gimy refuses a search, otherwise a clear error."""
+    blocked = error.status_code == 403
+    cached = _cached_search(q, page, blocked=blocked)
+    # With nothing matched, "no results" would read as if Gimy had been searched.
+    if cached is not None and (cached.items or not blocked):
+        return cached
+    if blocked:
+        raise SourceUnavailable(_SEARCH_BLOCKED) from error
+    raise error
 
 
 def _page_links(html: str, q: str, page: int, path: str) -> dict[int, str]:
@@ -290,10 +307,7 @@ def _search_once(q: str, page: int) -> Listing:
         cooldown = _search_cooldown
         known = _search_links.get(q)
     if cooldown and time.monotonic() < cooldown[0]:
-        cached = _cached_search(q, page)
-        if cached is not None:
-            return cached
-        raise cooldown[1]
+        return _search_refused(q, page, cooldown[1])
     if page == 1:
         path = f"/find/-------------.html?wd={quote(q)}"
     else:
@@ -318,10 +332,7 @@ def _search_once(q: str, page: int) -> Listing:
     except SiteBusy as e:
         with _search_lock:
             _search_cooldown = (time.monotonic() + (e.retry_after if e.retry_after is not None else 30), e)
-        cached = _cached_search(q, page)
-        if cached is not None:
-            return cached
-        raise
+        return _search_refused(q, page, e)
     except Exception:
         cached = _cached_search(q, page)
         if cached is not None:
@@ -480,9 +491,9 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
             last_error = e
     if not chosen or not master:
         raise last_error or UnsafeURL("stream not found")
-    sid, _route_title, ep_ids = chosen
-    if pick_ep not in ep_ids:
-        ep_ids = sorted(set(ep_ids + [pick_ep]), key=lambda x: int(x))
+    # Lines fill in at different times (one may list only the newest episodes),
+    # so offer every episode any line has; picking one resolves a line carrying it.
+    ep_ids = sorted({eid for _sid, _title, eps in routes for eid in eps} | {pick_ep}, key=int)
     episodes = [
         Episode(id=eid, title=f"第{eid}集", playlist=master if eid == pick_ep else "")
         for eid in ep_ids

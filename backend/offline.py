@@ -7,18 +7,21 @@ import json
 import logging
 import msvcrt
 import os
+import posixpath
 import queue
 import re
 import shutil
 import subprocess
 import threading
 import time
+from collections import Counter
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlparse
 
 from . import hls_proxy, http_client, sites, next_buffer, catalog
 from .models import VideoDetail
-from .security import UnsafeURL, SiteBusy, assert_hls_url, hls_allowed_hosts
+from .security import (HostUnresolvable, SourceUnavailable, UnsafeURL, SiteBusy, assert_hls_url,
+                       hls_allowed_hosts)
 
 ROOT = Path(r'D:\AI工作區\離線影片')
 # Only user-selected metadata is queued; the single worker downloads serially.
@@ -67,8 +70,15 @@ def _write(path, value):
 
 
 def _claim(folder):
-    folder.mkdir(parents=True, exist_ok=True)
-    handle = (folder / 'worker.lock').open('a+b')
+    for attempt in range(2):
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            handle = (folder / 'worker.lock').open('a+b')
+            break
+        except FileNotFoundError:
+            # The empty-folder sweep may remove the folder between mkdir and open.
+            if attempt:
+                raise
     handle.seek(0)
     try:
         msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
@@ -128,12 +138,17 @@ def status(key):
     item = _read(folder / 'status.json')
     if not item:
         return None
+    if item.get('error'):
+        item['error'] = _friendly(item['error'])  # Older records kept raw curl text.
     if item['phase'] in ('queued', 'downloading', 'retrying', 'preparing'):
         handle = _claim(folder)
         if handle:
             _release(handle)
-            return {**item, 'phase': 'cancelled' if (folder / 'cancel').exists() else 'retrying',
-                    'error': _cancel_message(folder) if (folder / 'cancel').exists() else '已保留進度，等待自動續傳'}
+            if (folder / 'cancel').exists():
+                return {**item, 'phase': 'cancelled', 'error': _cancel_message(folder)}
+            # A deferred retry keeps saying why it waits.
+            reason = item.get('error') if item['phase'] == 'retrying' else ''
+            return {**item, 'phase': 'retrying', 'error': reason or '已保留進度，等待自動續傳'}
         if (folder / 'cancel').exists():
             return {**item, 'phase': 'cancelling', 'error': '正在取消下載，等待目前連線結束；已下載部分保留'}
     if record:
@@ -204,12 +219,14 @@ def fetch_detail(source, video_id, episode=None):
     if local:
         return local
     fetch = sites.get(source).fetch_video
-    detail = fetch(video_id, ep=episode) if 'ep' in inspect.signature(fetch).parameters else fetch(video_id)
+    params = inspect.signature(fetch).parameters.values()
+    takes_ep = any(p.name == 'ep' or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
+    detail = fetch(video_id, ep=episode) if takes_ep else fetch(video_id)
     detail.source = source
     return overlay(detail)
 
 
-def enqueue(source, video_id, episode='', height=720, restart=False):
+def enqueue(source, video_id, episode='', height=720, restart=False, title='', episode_title=''):
     _start_maintenance()
     key = identity(source, video_id, episode)
     existing = status(key)
@@ -222,10 +239,14 @@ def enqueue(source, video_id, episode='', height=720, restart=False):
     if (folder / 'delete.json').exists():
         _release(handle)
         return status(key)
-    item = dict(id=key, source=source, video_id=video_id, episode=episode, title=video_id,
-                episode_title=episode, height=height, phase='queued', progress=0, error='', created=time.time())
+    # The page's names show in the queue until the source detail replaces them.
+    title, episode_title = title.strip() or video_id, episode_title.strip() or episode
+    item = dict(id=key, source=source, video_id=video_id, episode=episode, title=title,
+                episode_title=episode_title, height=height, phase='queued', progress=0, error='', created=time.time())
     if existing:
-        item.update(title=existing.get('title', video_id), episode_title=existing.get('episode_title', episode),
+        # Records queued before names were sent still hold the raw ids.
+        item.update(title=existing['title'] if existing.get('title') not in (None, '', video_id) else title,
+                    episode_title=existing['episode_title'] if existing.get('episode_title') not in (None, '', episode) else episode_title,
                     progress=0 if restart else existing.get('progress', 0),
                     height=height if restart else existing.get('height', height))
     try:
@@ -285,14 +306,17 @@ def cancel(key, reason=''):
 
 
 def playback(source, video_id, episode=''):
-    """Actual playback only: metadata resolution/prefetch must not call this."""
+    """Actual playback only: metadata resolution/prefetch must not call this.
+
+    The download keeps going (its connections yield to the player); the player
+    may reuse the segments it has already verified.
+    """
     key = identity(source, video_id, episode)
     item = status(key)
     if item and item['phase'] == 'complete':
         touch_played(key)
     if not item or item['phase'] in ('complete', 'deleting', 'delete_error'):
         return
-    cancel(key, '已開始播放此集，整集下載已取消；已下載部分保留，可繼續下載')
     folder = _folder(key)
     work = folder / 'parts'
     if work.resolve().parent != folder.resolve() or work.is_symlink():
@@ -418,6 +442,36 @@ def _maintenance_once():
                         pass  # Persistent, visible error; explicit retry required.
     _resume_pending()
     _cleanup_expired()
+    _sweep_empty_folders()
+
+
+_sweep_at = 0.0
+
+
+def _sweep_empty_folders():
+    # A finished deletion leaves its folder with only the lock file behind.
+    global _sweep_at
+    if time.monotonic() < _sweep_at or not ROOT.exists():
+        return
+    _sweep_at = time.monotonic() + 600
+    for folder in ROOT.iterdir():
+        try:
+            if (not re.fullmatch(r'[0-9a-f]{64}', folder.name) or folder.is_symlink() or not folder.is_dir()
+                    or [path.name for path in _folder(folder.name).iterdir()] != ['worker.lock']):
+                continue
+            handle = _claim(folder)
+            if handle is None:
+                continue
+            try:
+                alone = [path.name for path in folder.iterdir()] == ['worker.lock']
+            finally:
+                _release(handle)
+            if alone:
+                # Fails harmlessly if either app opened the lock again meanwhile.
+                (folder / 'worker.lock').unlink()
+                folder.rmdir()
+        except (OSError, ValueError):
+            continue
 
 
 def _resume_pending():
@@ -584,11 +638,22 @@ def _lane_check():
         raise _LaneStopped()
 
 
+class LowDisk(ValueError):
+    pass
+
+
 def _check(folder):
     if (folder / 'cancel').exists() or (folder / 'delete.json').exists():
         raise Cancelled()
     if shutil.disk_usage(folder).free < 512 * 1024 * 1024:
-        raise ValueError('硬碟剩餘空間不足 512 MB，已停止下載')
+        raise LowDisk('硬碟剩餘空間不足 512 MB，已停止下載')
+
+
+def free_bytes():
+    try:
+        return shutil.disk_usage(ROOT if ROOT.exists() else ROOT.anchor).free
+    except OSError:
+        return None
 
 
 def _file_hash(path):
@@ -610,14 +675,46 @@ class RetryLater(ValueError):
 
 
 def _transient(error):
-    if isinstance(error, (DownloadInterrupted, TimeoutError, ConnectionError)):
+    # A DNS failure is refused like other unsafe URLs, but it passes.
+    if isinstance(error, (DownloadInterrupted, TimeoutError, ConnectionError, HostUnresolvable)):
         return True
     if isinstance(error, (Cancelled, UnsafeURL, SiteBusy)):
         return False
     requests = http_client.requests
+    # 35/60: a CDN node with a broken TLS setup is retried later, never trusted.
     return isinstance(error, requests.RequestsError) and (
-        error.code in {5, 6, 7, 16, 18, 28, 52, 55, 56, 92}
+        error.code in {5, 6, 7, 16, 18, 28, 35, 52, 55, 56, 60, 92}
         or getattr(getattr(error, 'response', None), 'status_code', None) in {500, 502, 504})
+
+
+_CURL_CODE = re.compile(r'curl: \((\d+)\)')
+_CJK = re.compile(r'[㐀-鿿]')
+
+
+def _friendly(error):
+    """A short Chinese reason; library errors arrive as English curl text."""
+    text = error if isinstance(error, str) else str(error)
+    if isinstance(error, HostUnresolvable):
+        return '片源網域暫時查不到'
+    if isinstance(error, DownloadInterrupted):
+        return '片源傳輸中斷'
+    code = getattr(error, 'code', None) if isinstance(error, http_client.requests.RequestsError) else None
+    match = _CURL_CODE.search(text)
+    if not code and match:
+        code = int(match[1])
+    if code in (35, 60):
+        return '片源伺服器的安全憑證暫時有問題'
+    if code == 6:
+        return '片源網域暫時查不到'
+    if code == 28:
+        return '連線逾時'
+    if code:
+        return '片源連線失敗'
+    if isinstance(error, TimeoutError):
+        return '連線逾時'
+    if isinstance(error, ConnectionError):
+        return '連線中斷'
+    return text if _CJK.search(text) else '下載失敗，請重試'
 
 
 def _wait_retry(folder, delay):
@@ -632,6 +729,8 @@ def _wait_retry(folder, delay):
 PLAYBACK_IDLE = 2
 PLAYBACK_WAIT = 30
 PARALLEL_SEGMENTS = 3
+SOURCE_RETRIES = 3  # A source that stays down: retried after 10, 20 and 40 minutes.
+LATER_LIMIT = 12  # Deferred runs without progress before the download is marked failed.
 
 
 def _yield_to_playback(folder):
@@ -658,7 +757,7 @@ def _retry(operation, folder, on_retry=None, position=None):
             failures = 0 if current > best else failures + 1
             best = max(best, current)
             if failures > 8:
-                raise RetryLater('連線尚未恢復；已保留進度，稍後自動續傳') from error
+                raise RetryLater(f'連線尚未恢復（{_friendly(error)}）；已保留進度，稍後自動續傳') from error
             attempts += 1
             delay = min(30, 2 ** max(1, failures))
             if on_retry: on_retry(attempts, delay, error)
@@ -805,12 +904,87 @@ def _download_once(url, path, folder, limit=None, *, resume_partial=False, progr
             _write(metadata, record)
 
 
+_SEGMENT_TAGS = ('#EXTINF:', '#EXT-X-PROGRAM-DATE-TIME:', '#EXT-X-BITRATE:', '#EXT-X-GAP')
+
+
+def _is_discontinuity(line):
+    return line == '#EXT-X-DISCONTINUITY'
+
+
+def _without_ads(plan):
+    """Drop short clips spliced in from another folder between discontinuities.
+
+    Some CDNs insert an advert served by a different host; it adds nothing to
+    the episode and its host failing would stop the download. Anything less
+    clear-cut than that is kept unchanged.
+    """
+    remote = {filename: address for address, filename in plan['resources']}
+    lines = plan['lines']
+    blocks, segments, seconds, tagged = [], [], 0.0, False
+    for index, line in enumerate(lines + ['#EXT-X-DISCONTINUITY']):
+        if _is_discontinuity(line):
+            blocks.append((segments, tagged))
+            segments, tagged = [], False
+        elif line.startswith(('#EXT-X-KEY:', '#EXT-X-MAP:')):
+            tagged = True
+        elif line.startswith('#EXTINF:'):
+            seconds = float(line.split(':', 1)[1].split(',')[0])
+        elif line and not line.startswith('#'):
+            parsed = urlparse(remote.get(line, ''))
+            segments.append((seconds, (parsed.hostname or '', posixpath.dirname(parsed.path)), index))
+    totals = Counter()
+    for segments, _ in blocks:
+        for seconds, place, _ in segments:
+            totals[place] += seconds
+    total = sum(totals.values())
+    if len(totals) < 2 or not total:
+        return plan
+    main, main_seconds = totals.most_common(1)[0]
+    if main_seconds < total * .7:
+        return plan
+    adverts = [segments for segments, tagged in blocks
+               if segments and not tagged and all(place != main for _, place, _ in segments)
+               and sum(seconds for seconds, _, _ in segments) <= 120]
+    # Short episodes can carry the same 17-second advert three times (~16%).
+    if not adverts or sum(seconds for segments in adverts for seconds, _, _ in segments) > total * .3:
+        return plan
+    drop = {index for segments in adverts for _, _, index in segments}
+    # Each segment's own tags directly precede its URI line.
+    for index in sorted(drop):
+        before = index - 1
+        while before >= 0 and lines[before].startswith(_SEGMENT_TAGS):
+            drop.add(before)
+            before -= 1
+    kept, pending, started = [], None, False
+    for index, line in enumerate(lines):
+        if index in drop:
+            continue
+        if _is_discontinuity(line):
+            # One marker where the advert was; none before the first segment.
+            pending = line if started else None
+            continue
+        if pending and (line.startswith('#EXTINF:') or (line and not line.startswith('#'))):
+            kept.append(pending)
+            pending = None
+        if line and not line.startswith('#'):
+            started = True
+        kept.append(line)
+    used = {line for line in kept if line and not line.startswith('#')}
+    used.update(name for line in kept if 'URI=' in line for name in hls_proxy._URI_ATTR.findall(line))
+    return dict(plan, lines=kept, resources=[[address, filename] for address, filename in plan['resources'] if filename in used])
+
+
 def _hls(url, work, folder, height, progress, on_retry=None):
     # Resume the exact saved rendition, rather than reselecting a source line.
     plan = _read(work / 'plan.json')
-    if plan is None or not any((work / filename).exists() for _, filename in plan['resources']):
+    fresh = plan is None or not any((work / filename).exists() for _, filename in plan['resources'])
+    if fresh:
         plan = _hls_plan(url, folder, height, on_retry)
-        _write(work / 'plan.json', plan)
+    cleaned = _without_ads(plan)
+    # Plans saved before advert removal are cleaned when they resume.
+    if fresh or cleaned != plan:
+        _write(work / 'plan.json', cleaned)
+    plan = cleaned
     lines, resources = plan['lines'], plan['resources']
     filenames = {filename for _, filename in resources}
     if (not resources or len(filenames) != len(resources)
@@ -963,35 +1137,171 @@ def _hls_plan(url, folder, height, on_retry):
     return plan
 
 
-def _convert(input_path, output, folder, height, expected_duration):
+_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+_FIT_720 = "w='min(iw,1280)':h='min(ih,720)':force_original_aspect_ratio=decrease:force_divisible_by=2"
+_SCALE_720 = f"scale={_FIT_720}"
+# 1080p to 720p on a GTX 1650 / UHD 770 PC, against the former x264 fast
+# (2 threads, 2.8x real time): NVENC runs 13-30x with equal SSIM in larger
+# files, QSV ~16x and x264 veryfast (4 threads) ~7x at about the same size and
+# quality. Scaling on the CPU was the NVENC bottleneck once the PC was busy,
+# so the frames are resized on the graphics card (8-bit first, as NVENC needs).
+_ENCODERS = {
+    'h264_nvenc': (f"format=yuv420p,hwupload_cuda,scale_cuda={_FIT_720}:interp_algo=bicubic",
+                   ['-c:v', 'h264_nvenc', '-preset', 'p5', '-rc', 'vbr', '-cq', '25', '-b:v', '0', '-maxrate', '4M',
+                    '-bufsize', '8M', '-spatial-aq', '1', '-profile:v', 'high']),
+    'h264_qsv': (_SCALE_720, ['-c:v', 'h264_qsv', '-preset', 'medium', '-global_quality', '21', '-pix_fmt', 'nv12']),
+    'libx264': (_SCALE_720, ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p', '-threads', '4']),
+}
+_HARDWARE = ('h264_nvenc', 'h264_qsv')
+_encoder_lock = threading.Lock()
+_encoder_choice = None
+_broken_encoders = set()
+
+
+def _ffmpeg():
     import imageio_ffmpeg
-    command = [imageio_ffmpeg.get_ffmpeg_exe(), '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-               '-protocol_whitelist', 'file,crypto,data']
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def _encoder():
+    """The fastest H.264 encoder that works here, checked once per process."""
+    global _encoder_choice
+    with _encoder_lock:
+        if _encoder_choice is None or _encoder_choice in _broken_encoders:
+            _encoder_choice = 'libx264'
+            for name in _HARDWARE:
+                if name in _broken_encoders:
+                    continue
+                command = [_ffmpeg(), '-nostdin', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi',
+                           '-i', 'color=c=black:s=320x240:r=25', '-frames:v', '5', '-vf', _ENCODERS[name][0],
+                           *_ENCODERS[name][1], '-f', 'null', '-']
+                try:
+                    done = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                          stderr=subprocess.DEVNULL, timeout=15, creationflags=_NO_WINDOW)
+                except (OSError, subprocess.SubprocessError):
+                    continue
+                if done.returncode == 0:
+                    _encoder_choice = name
+                    break
+        return _encoder_choice
+
+
+def _parse_probe(text):
+    info = {}
+    match = re.search(r'Duration: (\d+):(\d{2}):(\d{2}(?:\.\d+)?)', text)
+    if match:
+        info['duration'] = int(match[1]) * 3600 + int(match[2]) * 60 + float(match[3])
+    video = re.search(r'Stream #[^\n]*?: Video: (\w+)([^\n]*)', text)
+    if video:
+        info['video'] = video[1]
+        size = re.search(r'\b(\d{2,5})x(\d{2,5})\b', video[2])
+        pixels = re.search(r', (yuv\w+|nv12|p010\w*|gray\w*)', video[2])
+        if size:
+            info['height'] = int(size[2])
+        if pixels:
+            info['pix_fmt'] = pixels[1]
+    audio = re.search(r'Stream #[^\n]*?: Audio: (\w+)', text)
+    if audio:
+        info['audio'] = audio[1]
+    return info
+
+
+def _probe(input_path):
+    command = [_ffmpeg(), '-nostdin', '-hide_banner', '-protocol_whitelist', 'file,crypto,data']
+    if input_path.suffix == '.m3u8':
+        command += ['-allowed_extensions', 'ALL']
+    try:
+        # Without an output ffmpeg exits with an error after describing the input.
+        done = subprocess.run(command + ['-i', str(input_path)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.PIPE, timeout=60, creationflags=_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    return _parse_probe(done.stderr.decode('utf-8', 'replace'))
+
+
+def _fits(info, height):
+    """Already playable at the requested size: repackaging keeps the picture as is."""
+    return (info.get('video') == 'h264' and info.get('pix_fmt') == 'yuv420p'
+            and 0 < info.get('height', 0) <= height and info.get('audio') in (None, 'aac'))
+
+
+def _converted_seconds(path):
+    try:
+        with path.open('rb') as stream:
+            stream.seek(max(0, path.stat().st_size - 4096))
+            stamps = re.findall(rb'out_time_us=(\d+)', stream.read())
+    except OSError:
+        return None
+    return int(stamps[-1]) / 1e6 if stamps else None
+
+
+def _convert(input_path, output, folder, height, expected_duration, on_progress=None):
+    """Make the MP4: repackage when the stream fits, else encode, falling back to x264."""
+    info = _probe(input_path)
+    duration = expected_duration or info.get('duration', 0)
+    attempts = ['copy'] if not height or _fits(info, height) else []
+    if height:
+        attempts.append(_encoder())
+        if attempts[-1] != 'libx264':
+            attempts.append('libx264')
+    for index, encoder in enumerate(attempts):
+        try:
+            _encode(input_path, output, folder, height, duration, encoder, on_progress,
+                    strict=index < len(attempts) - 1)
+        except (LowDisk, Cancelled):
+            raise
+        except ValueError:
+            output.unlink(missing_ok=True)
+            if index == len(attempts) - 1:
+                raise
+            continue
+        if encoder == 'libx264' and index and attempts[index - 1] in _HARDWARE:
+            # The same input encoded fine in software: the hardware path is broken.
+            with _encoder_lock:
+                _broken_encoders.add(attempts[index - 1])
+        return encoder
+
+
+def _encode(input_path, output, folder, height, duration, encoder, on_progress=None, strict=False):
+    command = [_ffmpeg(), '-nostdin', '-hide_banner', '-loglevel', 'error', '-y', '-protocol_whitelist', 'file,crypto,data']
     if input_path.suffix == '.m3u8':
         command += ['-allowed_extensions', 'ALL']
     command += ['-i', str(input_path), '-map', '0:v:0', '-map', '0:a:0?', '-sn', '-dn']
-    if height:
-        command += ['-vf', "scale=w='min(iw,1280)':h='min(ih,720)':force_original_aspect_ratio=decrease:force_divisible_by=2",
-                    '-c:v', 'libx264', '-preset', 'fast', '-crf', '22', '-pix_fmt', 'yuv420p', '-threads', '2',
-                    '-c:a', 'aac', '-b:a', '128k']
-    else:
+    if encoder == 'copy':
         command += ['-c', 'copy']
-    command += ['-movflags', '+faststart', '-progress', str(folder / 'conversion.txt'), str(output)]
+    else:
+        scale, video = _ENCODERS[encoder]
+        command += ['-vf', scale, *video, '-c:a', 'aac', '-b:a', '128k']
+    report = folder / 'conversion.txt'
+    report.unlink(missing_ok=True)
+    command += ['-movflags', '+faststart', '-progress', str(report), str(output)]
+    if on_progress:
+        on_progress(0, encoder)
     with (folder / 'conversion.log').open('wb') as log:
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log,
-                                   creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                                   creationflags=_NO_WINDOW)
         try:
             deadline = time.monotonic() + 6 * 3600
+            reported = time.monotonic()
             while process.poll() is None:
                 _check(folder)
                 if time.monotonic() > deadline:
                     raise ValueError('影片整理逾時，請重試')
+                if on_progress and duration and time.monotonic() - reported >= 1:
+                    reported = time.monotonic()
+                    done = _converted_seconds(report)
+                    if done is not None:
+                        on_progress(min(99.9, round(done * 100 / duration, 1)), encoder)
                 time.sleep(0.2)
             if process.returncode or not output.exists() or output.stat().st_size == 0:
                 raise ValueError('影片格式無法整理成 MP4，請改選 720p 重試')
-            stamps = re.findall(r'out_time_us=(\d+)', (folder / 'conversion.txt').read_text(errors='replace'))
-            if not stamps or (expected_duration and int(stamps[-1]) / 1e6 < expected_duration - max(3, expected_duration * .01)):
+            stamps = re.findall(r'out_time_us=(\d+)', report.read_text(errors='replace'))
+            length = int(stamps[-1]) / 1e6 if stamps else 0
+            margin = max(3, duration * .01)
+            if not stamps or (duration and length < duration - margin):
                 raise ValueError('影片長度不完整，已保留錯誤供重試')
+            if strict and duration and length > duration + margin:
+                raise ValueError('影片時間軸不連續')  # Re-encoding rebuilds it.
         finally:
             if process.poll() is None:
                 process.kill()
@@ -1016,6 +1326,7 @@ def _run(item):
         with save_lock:
             item.update(values)
             _write(folder / 'status.json', item)
+    started_at = item.get('progress', 0)
     try:
         _check(folder)
         save(phase='downloading', progress=item.get('progress', 0))
@@ -1024,7 +1335,7 @@ def _run(item):
             raise ValueError('無效的下載資料夾')
         def retrying(attempt, delay, error):
             save(phase='retrying', retry_attempt=attempt, retry_at=time.time() + delay,
-                 error='連線逾時或下載不完整，正在自動續傳')
+                 error=f'{_friendly(error)}，正在自動續傳')
         written = [0.0, -1.0]
         def progress(value):
             # Status is polled by the UI; per-chunk rewrites only add disk churn.
@@ -1041,7 +1352,16 @@ def _run(item):
             if detail.source != item['source'] or detail.id != item['video_id']:
                 raise ValueError('已保存的下載來源不符')
         else:
-            detail = _retry(lambda: fetch_detail(item['source'], item['video_id'], item['episode'] or None), folder, retrying)
+            try:
+                detail = _retry(lambda: fetch_detail(item['source'], item['video_id'], item['episode'] or None), folder, retrying)
+            except SourceUnavailable as exc:
+                # Usually a site's lines being down for a while: try again later, a few times.
+                tries = item.get('source_retries', 0)
+                if tries >= SOURCE_RETRIES:
+                    raise
+                item['source_retries'] = tries + 1
+                raise RetryLater(f'來源暫時無法使用（{exc}），約 {10 * 2 ** tries} 分鐘後自動重試', 600 * 2 ** tries) from exc
+            item['source_retries'] = 0
         selected = next((e for e in detail.episodes if e.id == item['episode']), None)
         if detail.episodes and not selected:
             raise ValueError('請指定要下載的集數')
@@ -1068,20 +1388,36 @@ def _run(item):
                 _download(url, input_path, folder, resume_partial=True, progress=progress, on_retry=retrying)
         else:
             input_path, duration = _hls(url, work, folder, item['height'], progress, on_retry=retrying)
-        save(phase='preparing', progress=100)
+        save(phase='preparing', progress=100, prepare_progress=0, prepare_mode='', later_count=0)
+        prepared = [0.0, -1.0]
+        def preparing(value, encoder):
+            mode = 'copy' if encoder == 'copy' else 'gpu' if encoder in _HARDWARE else 'cpu'
+            with save_lock:
+                now = time.monotonic()
+                changed = item.get('prepare_mode') != mode
+                item.update(prepare_progress=value, prepare_mode=mode)
+                if changed or now - prepared[0] >= 1 or abs(value - prepared[1]) >= 1:
+                    prepared[:] = [now, value]
+                    save()
         temporary = folder / 'video.part.mp4'
-        _convert(input_path, temporary, folder, item['height'], duration)
+        _convert(input_path, temporary, folder, item['height'], duration, preparing)
         _check(folder)
         temporary.replace(folder / 'video.mp4')
+        save(prepare_progress=100)
         _write(folder / 'complete.json', dict(item=item, detail=detail.model_dump(), size=(folder / 'video.mp4').stat().st_size, completed_at=time.time()))
         save(phase='complete', error='')
     except Cancelled:
         save(phase='cancelled', error=_cancel_message(folder))
     except RetryLater as exc:
-        save(phase='retrying', retry_at=time.time() + exc.delay,
-             retry_attempt=item.get('retry_attempt', 0) + 1, error=str(exc))
+        # Count deferrals that made no headway; a dead host must stop eventually.
+        later = 0 if item.get('progress', 0) > started_at else item.get('later_count', 0) + 1
+        if later > LATER_LIMIT:
+            save(phase='error', later_count=0, retry_at=0, error='多次重試仍無法連線，請稍後按「繼續下載」')
+        else:
+            save(phase='retrying', retry_at=time.time() + exc.delay, later_count=later,
+                 retry_attempt=item.get('retry_attempt', 0) + 1, error=str(exc))
     except Exception as exc:
-        save(phase='error', error=str(exc) or '下載失敗，請重試')
+        save(phase='error', error=_friendly(exc))
     finally:
         # Interrupted downloads retain their exact rendition and verified parts.
         if item.get('phase') == 'complete' and work.exists() and work.resolve().parent == folder.resolve() and not work.is_symlink():

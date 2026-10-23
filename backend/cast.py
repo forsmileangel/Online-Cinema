@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from functools import wraps
 from urllib.parse import parse_qs, urlparse, urlencode, urlunparse
 
-from . import db, dlna, hls_proxy, lan
+from . import db, dlna, hls_proxy, lan, read_ahead
 from .settings import PORT
 
 _lock = threading.RLock()
@@ -112,6 +112,32 @@ def discover(timeout: float = 6) -> list[dict]:
                 for uuid, d in found.items()]
         from . import cast_devices
         return cast_devices.remember(devices)
+
+
+def adopt(device) -> None:
+    """Use a renderer found outside a full scan (right after waking it), and remember its address."""
+    with _lock:
+        _casts[device.uuid] = device
+    read_ahead.add_receiver(_host(device))
+    from . import cast_devices
+    cast_devices.remember([{"uuid": device.uuid, "name": device.name, "host": device.host, "kind": "dlna"}])
+
+
+def device_host(uuid: str) -> str:
+    """The cast device's address ('' when it is not known yet)."""
+    with _lock:
+        device = _casts.get(uuid)
+    return _host(device) if device is not None else ""
+
+
+def is_nest_hub(uuid: str) -> bool:
+    """Nest Hub keeps its own 720p handling; it is not given the top rendition."""
+    with _lock:
+        device = _casts.get(uuid)
+    if device is None or isinstance(device, dlna.Renderer):
+        return False
+    model = str(getattr(device.cast_info, "model_name", "") or "").lower()
+    return "nest hub" in model or "google home hub" in model
 
 
 def selected_uuid() -> str:

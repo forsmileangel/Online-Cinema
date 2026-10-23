@@ -16,7 +16,8 @@ from .security import SiteBusy, assert_hls_url, hls_allowed_hosts
 _lock = threading.Lock()
 _cache: OrderedDict[str, bytes] = OrderedDict()
 _bytes = 0
-_MAX_BYTES = 160 * 1024 * 1024
+# Room for a TV's read-ahead window (read_ahead.py) beside browser playback.
+_MAX_BYTES = 768 * 1024 * 1024
 _MAX_EACH = 16 * 1024 * 1024
 _SEG_RE = re.compile(r"(video)(\d+)(\.jpeg)$", re.I)
 _q: Queue[str] = Queue(maxsize=24)
@@ -25,6 +26,7 @@ _inflight: dict[str, threading.Event] = {}
 # Segment order of recent media playlists, keyed by their first segment.
 _PLAYLISTS = 6
 _playlists: OrderedDict[str, list[str]] = OrderedDict()
+_durations: dict[str, list[float]] = {}
 _position: dict[str, tuple[str, int]] = {}
 # A rejected/throttled host is never prefetched again until it cools down.
 _COOLDOWN = 300
@@ -37,6 +39,13 @@ def get(url: str) -> bytes | None:
         if data is not None:
             _cache.move_to_end(url)
         return data
+
+
+def size(url: str) -> int | None:
+    """Cached length without refreshing its LRU place (None when absent)."""
+    with _lock:
+        data = _cache.get(url)
+        return None if data is None else len(data)
 
 
 def put(url: str, data: bytes) -> None:
@@ -80,13 +89,15 @@ def wait(url: str, timeout: float) -> bytes | None:
     return get(url)
 
 
-def remember(segments: list[str]) -> None:
+def remember(segments: list[str], durations: list[float] | None = None) -> None:
     if not segments:
         return
     key = segments[0]
     with _lock:
         _forget(key, _playlists.pop(key, None) or [])
         _playlists[key] = list(segments)
+        if durations and len(durations) == len(segments):
+            _durations[key] = list(durations)
         for index, url in enumerate(segments):
             _position[url] = (key, index)
         while len(_playlists) > _PLAYLISTS:
@@ -94,9 +105,27 @@ def remember(segments: list[str]) -> None:
 
 
 def _forget(key: str, urls: list[str]) -> None:
+    _durations.pop(key, None)
     for url in urls:
         if _position.get(url, ("",))[0] == key:
             del _position[url]
+
+
+def position(url: str) -> tuple[str, int] | None:
+    """(playlist key, segment index) of a remembered media segment."""
+    with _lock:
+        return _position.get(url)
+
+
+def playlist(key: str) -> tuple[list[str], list[float]]:
+    """Segment URLs and EXTINF seconds of a remembered playlist (seconds may be empty)."""
+    with _lock:
+        return list(_playlists.get(key, [])), list(_durations.get(key, []))
+
+
+def downloading(url: str) -> bool:
+    with _lock:
+        return url in _inflight
 
 
 def _host(url: str) -> str:
@@ -111,6 +140,9 @@ def pause(url: str, seconds: float = _COOLDOWN) -> None:
 def _cooling(url: str) -> bool:
     with _lock:
         return _cooldown.get(_host(url), 0) > time.monotonic()
+
+
+cooling = _cooling
 
 
 def _prefetch_one(url: str) -> None:

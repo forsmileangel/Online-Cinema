@@ -222,8 +222,9 @@ button { cursor: pointer; }
   box-shadow: var(--shadow);
 }
 .ep-rail-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(32px, 1fr));
+  align-content: start;
   gap: 6px;
   overflow-y: auto;
   flex: 1;
@@ -237,9 +238,36 @@ button { cursor: pointer; }
 .ep-rail .chip {
   width: 100%;
   text-align: center;
-  flex: 0 0 auto;
+  padding-inline: 0;
+  font-variant-numeric: tabular-nums;
   background: var(--bg-2);
 }
+.ep-rail .chip.wide { grid-column: 1 / -1; padding-inline: 10px; }
+/* Downloaded episodes play from the local file. */
+.ep-rail .chip.is-local { position: relative; }
+.ep-rail .chip.is-local::after {
+  content: "✓";
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--ok);
+}
+.ep-rail .chip.is-local.on::after { color: #fff; }
+/* Episodes this source lacks, and where else to watch them. */
+.ep-missing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 10px;
+}
+.ep-missing a { color: var(--accent-2); text-decoration: underline; }
 .meta h1 { font-size: 22px; margin: 0 0 8px; line-height: 1.4; }
 .orig-title { color: var(--muted); margin: 0 0 8px; font-size: 15px; line-height: 1.45; }
 .synopsis {
@@ -379,10 +407,11 @@ button.chip { font: inherit; }
 }
 .fs-col {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
+  flex-direction: row;
+  align-items: center;
   gap: 2px;
 }
+.fs-col .ico { display: none; }
 .fs-col button {
   min-width: 56px;
   font-weight: 600;
@@ -526,12 +555,10 @@ select.field, .field {
     position: static;
   }
   .ep-rail-list {
-    flex-direction: row;
-    flex-wrap: wrap;
+    grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
     overflow-y: auto;
     max-height: min(24dvh, 180px);
   }
-  .ep-rail .chip { width: auto; }
 }
 @media (max-width: 720px) {
   .player-wrap { --player-max: max(100px, calc(100dvh - var(--bar) - 210px)); }
@@ -568,3 +595,104 @@ select.field, .field {
   .next-up { right: 10px; bottom: 132px; padding: 8px 10px; font-size: 13px; }
   .osd { font-size: 15px; padding: 8px 14px; }
 }
+
+/* Finding videos: loading states, search scope, library */
+.grid.is-busy { opacity: 0.45; pointer-events: none; transition: opacity 0.2s; }
+.card.skeleton .poster, .skeleton-line {
+  background: linear-gradient(90deg, var(--card) 25%, color-mix(in srgb, var(--card) 80%, var(--text)) 37%, var(--card) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shine 1.4s ease infinite;
+}
+.card.skeleton .poster { box-shadow: none; }
+.skeleton-line { display: block; height: 12px; width: 80%; margin-top: 10px; border-radius: 6px; }
+.skeleton-line.short { width: 50%; }
+.row-head .skeleton-line { width: 160px; height: 18px; margin: 0; }
+@keyframes skeleton-shine { from { background-position: 100% 50%; } to { background-position: 0 50%; } }
+@media (prefers-reduced-motion: reduce) {
+  .card.skeleton .poster, .skeleton-line { animation: none; }
+}
+.scope-switch { margin: -6px 0 18px; }
+.try-elsewhere { margin: -24px 0 24px; padding: 0 8px; }
+.row-note { margin: -6px 0 4px; font-size: 13px; color: var(--muted); }
+.multi-failed { margin: 8px 0 0; padding-left: 20px; color: var(--muted); font-size: 14px; line-height: 1.8; }
+.multi-failed strong { color: var(--text); font-weight: 600; }
+
+.search { position: relative; }
+.search input { padding-right: 38px; }
+.search input::-webkit-calendar-picker-indicator { display: none !important; }
+.search-clear {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  border: 0; background: transparent; color: var(--muted);
+  width: 30px; height: 30px; border-radius: 999px; padding: 0;
+}
+.search-clear:hover { color: var(--text); background: var(--card); }
+
+.lib-tabs { display: flex; gap: 8px; margin: 8px 0 18px; }
+.lib-tabs a {
+  padding: 8px 18px; border-radius: 999px; font-size: 18px; font-weight: 700;
+  color: var(--muted); background: var(--card); border: 1px solid var(--line);
+}
+.lib-tabs a.active { color: #fff; background: var(--accent); border-color: transparent; }
+.lib-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-bottom: 16px; }
+.lib-filters .field { min-width: 200px; }
+
+.card-remove {
+  position: absolute; z-index: 3; top: 8px; right: 8px;
+  width: 30px; height: 30px; padding: 0; border: 0; border-radius: 999px;
+  background: rgba(0, 0, 0, 0.7); color: #fff; font-size: 13px;
+  opacity: 0; transition: opacity 0.2s;
+}
+.card:hover .card-remove, .card-remove:focus-visible { opacity: 1; }
+@media (hover: none) { .card-remove { opacity: 1; } }
+.undo-bar {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 30;
+  display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 32px);
+  padding: 8px 8px 8px 18px; border-radius: 999px;
+  background: var(--bg-2); border: 1px solid var(--line); box-shadow: var(--shadow);
+}
+.undo-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-mode .card-remove { opacity: 1; }
+.tv-mode .card-remove:focus, .tv-mode .lib-tabs a:focus, .tv-mode .btn:focus, .tv-mode .poster-link:focus {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* Phones: one compact control row that fits inside the 16:9 picture. */
+@media (max-width: 560px) {
+  .controls { padding: 6px 8px 8px; }
+  .ctrl-row { flex-wrap: nowrap; align-items: center; gap: 2px; margin-top: 2px; }
+  .ctrl-row button { padding: 4px; min-width: 32px; }
+  .ctrl-row .times { font-size: 12px; white-space: nowrap; }
+  .ctrl-row select, .ctrl-row .field { padding: 4px 6px; font-size: 12px; min-width: 0; max-width: 96px; }
+  .vol:not(.cast), .vol .times { display: none; }
+  .vol input[type="range"] { width: 56px; }
+  .fs-col .lbl { display: none; }
+  .fs-col .ico { display: inline; font-size: 18px; }
+  .fs-col button { min-width: 32px; }
+  .quality-status { font-size: 12px; }
+  .episode-controls { margin-top: 2px; gap: 6px; font-size: 12px; }
+  .episode-controls button { padding: 4px 8px; }
+  .loading-pill { bottom: auto; top: 8px; }
+}
+
+/* Card shape follows the source: posters stand 2:3, stills stay 16:9. */
+.scroller { align-items: flex-start; }
+.grid { align-items: start; }
+.poster.portrait { aspect-ratio: 2 / 3; }
+.card.portrait { width: 150px; flex-basis: 150px; }
+.grid .card.portrait { width: auto; }
+.grid.portrait { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+.grid.large.portrait { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+/* Titles take what they need; the full title is in the tooltip. */
+.card .title { -webkit-line-clamp: 3; min-height: 2.9em; }
+.card.portrait .title { -webkit-line-clamp: 2; }
+.grid.large .title { -webkit-line-clamp: 3; min-height: 2.9em; }
+@media (max-width: 720px) {
+  .scroller .card.portrait { width: 130px; flex-basis: 130px; }
+  .grid.portrait { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+}
+.grid.mixed { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; }
+.watch > .ep-missing { margin: 0 0 10px; width: 100%; box-sizing: border-box; }
+
+.pair-prompt { max-width: 560px; margin: 0 auto; padding-top: 48px; }
+.pair-input { width: 9em; font-size: 24px; letter-spacing: 0.25em; text-align: center; text-transform: uppercase; }

@@ -69,7 +69,7 @@ class SeriesRepairTests(unittest.TestCase):
     @unittest.skipUnless(HAS_DRAMA,'DramaQ is only in Online Cinema')
     def test_dramaq_resolves_first_before_latest_and_does_not_invent_future_episode(self):
         from backend.sites import dramaq
-        with patch.object(dramaq,'_get',side_effect=lambda path:fixture('dramaq_detail.html') if path.startswith('/detail/') else fixture('dramaq_play.html')), patch.object(dramaq,'_plays',return_value=['https://hn.bfvvs.com/neutral/index.m3u8']) as plays, patch.object(security,'_assert_not_private'):
+        with patch.object(dramaq,'_get',side_effect=lambda path:fixture('dramaq_detail.html') if path.startswith('/detail/') else fixture('dramaq_play.html')), patch.object(dramaq,'_plays',return_value=['https://hn.bfvvs.com/neutral/index.m3u8']) as plays, patch.object(dramaq,'dlna_media_url'), patch.object(security,'_assert_not_private'):
             result=dramaq.fetch_video('202690895')
         self.assertEqual(plays.call_args.args[1],'ep1')
         self.assertEqual(result.resolved_episode_id,'ep1')
@@ -180,7 +180,7 @@ class GimyRepairTests(unittest.TestCase):
     def test_busy_search_makes_one_request_and_does_not_cache_false_empty(self):
         with patch.object(gimy,'_get',side_effect=security.SiteBusy('Gimy',403)) as get:
             for _ in range(2):
-                with self.assertRaises(security.SiteBusy):gimy.search('Neutral')
+                with self.assertRaises(security.SourceUnavailable):gimy.search('Neutral')  # 403 is the Cloudflare check
         self.assertEqual(get.call_count,1)
         self.assertIsNone(gimy._hot_memo)
 

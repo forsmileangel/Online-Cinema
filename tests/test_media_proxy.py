@@ -133,13 +133,17 @@ class MediaProxyTests(unittest.TestCase):
         self.assertEqual(response.status_code, 416)
         self.assertEqual(response.headers["content-range"], "bytes */900")
 
-    def test_segment_cache_does_not_serve_full_segment_for_a_range(self):
+    def test_range_is_cut_from_a_cached_segment_or_fetched_upstream(self):
         upstream = Mock(headers={"Content-Range": "bytes 0-1/100"}, status_code=206)
-        with patch.object(http_client, "fetch_bytes", return_value=upstream), patch.object(hls_proxy.seg_cache, "get") as cache:
+        with patch.object(http_client, "fetch_bytes", return_value=upstream), patch.object(hls_proxy.seg_cache, "get", return_value=None):
             response = hls_proxy.serve_media(request(headers={"Range": "bytes=0-1"}), "https://surrit.com/seg.ts")
         self.assertEqual(response.status_code, 206)
-        cache.assert_not_called()
         asyncio.run(response.background())
+        # A read-ahead copy answers the exact range, never the whole segment.
+        with patch.object(http_client, "fetch_bytes", side_effect=AssertionError("no upstream")), \
+                patch.object(hls_proxy.seg_cache, "get", return_value=b"0123456789"):
+            response = hls_proxy.serve_media(request(headers={"Range": "bytes=2-5"}), "https://surrit.com/seg.ts")
+        self.assertEqual((response.status_code, response.body, response.headers["content-range"]), (206, b"2345", "bytes 2-5/10"))
 
     def test_jpeg_named_hls_segment_keeps_media_mime_and_cache(self):
         with patch.object(hls_proxy.seg_cache, "get", return_value=b"\x47" * 188), patch.object(hls_proxy.seg_cache, "enqueue_next"):

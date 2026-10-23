@@ -173,6 +173,7 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
 
   return { canPlay: !!playlist, devices, selected, setSelected, inKaohsiung, setInKaohsiung: (enabled: boolean) => scan(enabled), busy, restoring, active, status, msg, uncertain, canControl, canSeek, canSetVolume, canMute, setVolume, setMuted, scan, play, control, returnToLocal,
     episode: (episode_id: string) => command("episode", { episode_id }),
-    autoplay: (autoplay_next: boolean) => command("autoplay", { autoplay_next }), retry: () => command("retry"), saveMac };
+    autoplay: (autoplay_next: boolean) => command("autoplay", { autoplay_next }), retry: () => command("retry"),
+    restoreQuality: () => command("quality"), saveMac };
 }
 export type CastingController = ReturnType<typeof useCasting>;

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from fastapi.staticfiles import StaticFiles
@@ -17,7 +19,7 @@ from . import cast_devices as known_devices
 from . import db
 from . import lan
 from . import tv_session
-from . import next_buffer, offline
+from . import alternatives, display, next_buffer, offline, terms
 from . import hls_proxy
 from . import http_client
 from . import settings as S
@@ -69,7 +71,7 @@ class AccessGuard(BaseHTTPMiddleware):
             path = request.url.path
             if path.startswith("/assets") or path.startswith("/api/hls") or path.startswith("/api/img") or path.startswith("/api/offline/media/"):
                 return await call_next(request)
-            if path in ("/api/tv/pair", "/api/health", "/favicon.ico"):
+            if path in ("/api/tv/pair", "/api/tv/status", "/api/health", "/favicon.ico"):
                 return await call_next(request)
             if not tv_session.valid_cookie(request.cookies.get("cinema_tv")):
                 if path.startswith("/api/") and not path.startswith("/api/cast"):
@@ -140,7 +142,8 @@ def _err(exc: Exception, status: int = 400) -> HTTPException:
 
 @app.get("/api/offline")
 def offline_list(source: str | None = None, video_id: str | None = None):
-    return {"directory": str(offline.ROOT), "items": offline.listing(catalog.SOURCES, source, video_id), "cleanup": offline.cleanup_policy()}
+    return {"directory": str(offline.ROOT), "items": display.rows(None, offline.listing(catalog.SOURCES, source, video_id)),
+            "cleanup": offline.cleanup_policy(), "free_bytes": offline.free_bytes()}
 
 
 @app.post("/api/offline")
@@ -148,7 +151,8 @@ def offline_download(body: OfflineIn):
     if body.source not in catalog.SOURCES:
         raise HTTPException(400, "不支援的來源")
     try:
-        return offline.enqueue(body.source, safe_video_id(body.video_id), body.episode, body.height, restart=body.restart)
+        return offline.enqueue(body.source, safe_video_id(body.video_id), body.episode, body.height, restart=body.restart,
+                               title=body.title, episode_title=body.episode_title)
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -242,14 +246,14 @@ def home(source: str | None = None):
                     "progress": max(0.0, min(pos / dur, 1.0)),
                 }
             )
-        return HomePayload(
+        return display.home(src, HomePayload(
             continue_watching=cont[:20],
             rows=[HomeRow(kind=k, title=t, items=items) for k, t, items in rows_raw],
             mirror="",
             source=src,
             picks=picks or [],
             error=home_error,
-        )
+        ))
     except Exception as e:
         raise _err(e, 502) from e
 
@@ -258,7 +262,7 @@ def home(source: str | None = None):
 def browse(kind: str, page: int = Query(1, ge=1, le=1000), source: str | None = None):
     src = _src(source)
     try:
-        return sites.get(src).browse(kind, page=page)
+        return display.listing(src, sites.get(src).browse(kind, page=page))
     except Exception as e:
         raise _err(e) from e
 
@@ -267,7 +271,7 @@ def browse(kind: str, page: int = Query(1, ge=1, le=1000), source: str | None = 
 def browse_slug(kind: str, slug: str, page: int = Query(1, ge=1, le=1000), source: str | None = None):
     src = _src(source)
     try:
-        return sites.get(src).browse(kind, slug=slug, page=page)
+        return display.listing(src, sites.get(src).browse(kind, slug=slug, page=page))
     except Exception as e:
         raise _err(e) from e
 
@@ -280,9 +284,59 @@ def search(
 ):
     src = _src(source)
     try:
-        return sites.get(src).search(q, page=page)
+        return display.listing(src, terms.search(sites.get(src), q, page))
     except Exception as e:
         raise _err(e) from e
+
+
+MULTI_SEARCH_SECONDS = 35
+
+
+def _multi_search_lines(q: str, sources: list[str]):
+    """One NDJSON line per source, in the order the searches finish."""
+
+    def one(src: str) -> dict:
+        try:
+            return {"source": src, "ok": True, "listing": display.listing(src, terms.search(sites.get(src), q, 1)).model_dump(mode="json")}
+        except Exception as exc:
+            return {"source": src, "ok": False, "error": _err(exc).detail}
+
+    def line(result: dict) -> str:
+        return json.dumps(result, ensure_ascii=False) + "\n"
+
+    pool = ThreadPoolExecutor(max_workers=6)
+    futures = {pool.submit(one, src): src for src in sources}
+    sent = set()
+    try:
+        for future in as_completed(futures, timeout=MULTI_SEARCH_SECONDS):
+            sent.add(future)
+            yield line(future.result())
+    except FuturesTimeout:
+        for future, src in futures.items():
+            if future not in sent:
+                yield line(future.result() if future.done() else {"source": src, "ok": False, "error": "搜尋逾時，請稍後再試"})
+    finally:
+        # A slow site keeps its worker until its own request timeout; queued ones never start.
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+@app.get("/api/search/multi")
+def search_multi(q: str = Query(..., min_length=1, max_length=50), sources: str = Query(..., max_length=400)):
+    known = {s["id"] for s in sites.available()}
+    wanted = [s for s in dict.fromkeys(sources.split(",")) if s in known][:20]
+    if not wanted:
+        raise HTTPException(422, "請選擇要搜尋的來源")
+    return StreamingResponse(_multi_search_lines(q, wanted), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/alternatives")
+def other_sources(source: str = Query(..., max_length=40), video_id: str = Query(..., max_length=200),
+                  title: str = Query(..., min_length=1, max_length=200)):
+    """Same show on the other sources of its group, for episodes this source lacks."""
+    if source not in catalog.SOURCES:
+        raise HTTPException(400, "不支援的來源")
+    return {"items": alternatives.find(source, safe_video_id(video_id), title)}
 
 
 @app.post("/api/anigamer/prepare/{video_id}")
@@ -321,7 +375,7 @@ def video_on_source(source: str, video_id: str, ep: str | None = Query(None, max
             detail.episode_id = hist.get("episode_id")
             if not detail.episodes or (detail.episode_id and detail.episode_id == detail.resolved_episode_id):
                 detail.position_sec = float(hist["position_sec"] or 0)
-        return detail
+        return display.video(src, detail)
     except HTTPException:
         raise
     except Exception as e:
@@ -366,7 +420,7 @@ def favorites():
                 "source": row.get("source") or "hongguo",
             }
         )
-    return {"items": items}
+    return {"items": display.rows(None, items)}
 
 
 @app.post("/api/favorites")
@@ -388,8 +442,8 @@ def del_favorite(video_id: str, source: str = "hongguo"):
 
 
 @app.get("/api/history")
-def history():
-    return {"items": db.list_history()}
+def history(limit: int = Query(40, ge=1, le=1000), source: str | None = None):
+    return {"items": display.rows(None, db.list_history(limit=limit, source=source))}
 
 
 @app.put("/api/history")
@@ -398,6 +452,15 @@ def put_history(body: HistoryIn):
         db.upsert_history(
             body.id, body.title, body.cover, body.position_sec, body.duration_sec, source=body.source, episode_id=body.episode_id
         )
+        return {"ok": True}
+    except Exception as e:
+        raise _err(e) from e
+
+
+@app.delete("/api/history/{video_id}")
+def del_history(video_id: str, source: str = "hongguo"):
+    try:
+        db.remove_history(video_id, source=source)
         return {"ok": True}
     except Exception as e:
         raise _err(e) from e
@@ -557,11 +620,24 @@ def configure_cast_device(body: CastDeviceConfigIn):
         raise HTTPException(400, str(e)) from e
 
 
+@app.get("/api/tv/status")
+def tv_status(request: Request):
+    """Whether this device may use the app; lets a LAN device ask for the code instead of failing."""
+    client = request.client.host if request.client else "127.0.0.1"
+    return {"paired": lan.is_loopback(client) or tv_session.valid_cookie(request.cookies.get("cinema_tv"))}
+
+
 @app.post("/api/tv/pair")
-def tv_pair(body: TvPairIn):
+def tv_pair(body: TvPairIn, request: Request):
+    client = request.client.host if request.client else "127.0.0.1"
+    wait = tv_session.retry_after(client)
+    if wait:
+        raise HTTPException(429, f"配對碼輸入錯誤次數過多，請 {wait} 秒後再試", headers={"Retry-After": str(wait)})
     code = body.code
     if not tv_session.valid_code(code):
+        tv_session.record_failure(client)
         raise HTTPException(403, "配對碼不正確")
+    tv_session.clear_failures(client)
     resp = JSONResponse({"ok": True})
     resp.set_cookie("cinema_tv", tv_session.cookie_token(), httponly=True, samesite="lax", max_age=30 * 24 * 3600)
     return resp

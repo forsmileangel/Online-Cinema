@@ -27,6 +27,13 @@ def to_traditional(text: str) -> str:
     return _convert(text, "s2tw")
 
 
+def convert_phrases(text: str, mode: str) -> str:
+    """tw2sp / s2twp: also swap regional words (軟體 ↔ 软件), not just the script."""
+    if mode not in ("tw2sp", "s2twp"):
+        raise ValueError(mode)
+    return _convert(text, mode)
+
+
 def normalize_traditional(text: str) -> str:
     """Taiwan Traditional form with script variants folded (鬥→斗, 裏→裡)."""
     return to_traditional(to_simplified(text))

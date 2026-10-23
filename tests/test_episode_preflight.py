@@ -39,7 +39,8 @@ class EpisodePreflightTests(unittest.TestCase):
         self.assertIn('dytt-tvs.com', result.playlist)
         self.assertEqual(result.resolved_episode_id, '2')
         self.assertEqual([c.args[0] for c in fetch.call_args_list], [BAD, GOOD])
-        self.assertEqual([e.playlist for e in result.episodes if e.id != '2'], [''])
+        # Episode 3 only exists on the line that failed, yet stays listed; no other episode is preloaded.
+        self.assertEqual([(e.id, e.playlist) for e in result.episodes if e.id != '2'], [('1', ''), ('3', '')])
 
     def test_master_child_is_checked_before_selecting_route(self):
         child = 'https://vv.jisuzyv.com/play/b2k9v3zd/media.m3u8'

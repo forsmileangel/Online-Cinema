@@ -13,6 +13,14 @@ SOURCE_LABELS = {
 }
 SOURCES = tuple(SOURCE_LABELS)
 
+# Groups order the source picker and define 「同類來源」 for multi-source search.
+GROUP_ORDER = ("影劇", "短劇", "動畫")
+SOURCE_GROUPS = {
+    "chinaq": "影劇", "gimy": "影劇", "mmov": "影劇", "mvffm": "影劇", "dramaq": "影劇",
+    "hongguo": "短劇",
+    "anigamer": "動畫",
+}
+
 
 def normalize_source(raw: str | None) -> str:
     s = (raw or "").strip().lower()

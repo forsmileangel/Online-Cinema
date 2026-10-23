@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import { MissingEpisodes } from "../components/MissingEpisodes";
 import { OfflinePanel, notifyOfflinePlayback } from "../components/Offline";
 import { NextEpisodeBuffer } from "../components/NextEpisodeBuffer";
 import { CastBar } from "../components/CastBar";
@@ -8,7 +9,7 @@ import { PosterRow } from "../components/PosterRow";
 import { api } from "../api";
 import { useCasting } from "../hooks/useCasting";
 import { usePlaybackRecovery } from "../hooks/usePlaybackRecovery";
-import { useSource } from "../source";
+import { useSource, withSrc } from "../source";
 import type { Episode, VideoDetail } from "../types";
 
 function looksJp(s: string) {
@@ -26,6 +27,12 @@ function mergeEpisodes(prev: VideoDetail, next: VideoDetail): VideoDetail {
     episodes: [...episodes, ...extras],
     playlist: next.playlist || prev.playlist,
   };
+}
+
+// Standard "第N集" titles show only N so several episodes fit on each rail row;
+// any other title (lines, named episodes) keeps its full text on a row of its own.
+function epLabel(title: string) {
+  return /^第\s*(\d{1,4})\s*集$/.exec(title.trim())?.[1] ?? title;
 }
 
 function epKey(source: string, id: string) {
@@ -92,7 +99,6 @@ export function Watch() {
   const [epTouched, setEpTouched] = useState(false);
   const [resumeEp, setResumeEp] = useState("");
   const [episodeError, setEpisodeError] = useState("");
-  const [offlineError, setOfflineError] = useState("");
   const [resolveAttempt, setResolveAttempt] = useState(0);
   const [retryResume, setRetryResume] = useState<{ episode: string; position: number; paused: boolean } | null>(null);
   const recoveryProgress = useRef<(position: number) => void>(() => {});
@@ -382,14 +388,15 @@ export function Watch() {
 
   return (
     <div className="watch">
-      {offlineError ? <p role="alert">{offlineError}</p> : null}
+      {/* Above the player: below it, the hint sat under the fold on a normal screen. */}
+      <MissingEpisodes source={source} id={id} title={data.title} episodes={episodes} />
       <div className={`watch-stage${manyEps ? " has-eps" : ""}`}>
         <div className="player-wrap">
           <div className="player-screen">
             {!cast.restoring && playlist && !episodeError ? (
               <Player key={`${activeEp}:${resolveAttempt}`} onPlaybackStarted={() => {
-                setOfflineError("");
-                void notifyOfflinePlayback(source, id, activeEp).catch(e => setOfflineError(`停止此集下載失敗：${e.message}`));
+                // Lets the player reuse downloaded segments; nothing to show if it fails.
+                void notifyOfflinePlayback(source, id, activeEp).catch(() => undefined);
               }} onError={playbackError} src={playlist} startAt={startAt} startPaused={retryResume?.episode === activeEp && retryResume.paused} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} episodeControls={episodeControls} nextEpisode={nextEpisode && !cast.active && !cast.busy ? { title: nextEpisode.title, onPlay: () => pickEpisode(nextEpisode.id) } : undefined} />
             ) : (
               <div className="player">
@@ -402,7 +409,7 @@ export function Watch() {
               : <button className="btn" onClick={() => retryEpisode()}>重試這一集</button>}</p> : null}
           </div>
           <CastBar controller={cast} currentEpisode={currentEp?.title} currentTitle={title} />
-          <OfflinePanel key={`${source}:${id}`} source={source} id={id} episodes={episodes} current={activeEp}
+          <OfflinePanel key={`${source}:${id}`} source={source} id={id} title={data.title} episodes={episodes} current={activeEp}
             local={playlist.startsWith("/api/offline/media/")} onReady={downloaded} />
           <NextEpisodeBuffer key={`${source}:${id}:${activeEp}`} enabled={autoplay}
             url={episodes[epIds.indexOf(activeEp) + 1]?.playlist || ""}
@@ -428,19 +435,25 @@ export function Watch() {
               {autoplay ? "自動下一集：開" : "自動下一集：關"}
             </button>
             <div className="ep-rail-list" ref={epRailRef}>
-              {episodes.map((e) => (
-                <button
-                  key={e.id}
-                  type="button"
-                  className={`chip${e.id === activeEp ? " on" : ""}`}
-                  aria-current={e.id === activeEp ? "step" : undefined}
-                  data-tv="1"
-                  disabled={cast.busy}
-                  onClick={() => pickEpisode(e.id)}
-                >
-                  {e.title}
-                </button>
-              ))}
+              {episodes.map((e) => {
+                const label = epLabel(e.title);
+                const local = e.playlist?.startsWith("/api/offline/media/");
+                return (
+                  <button
+                    key={e.id}
+                    type="button"
+                    className={`chip${/^\d{1,4}$/.test(label) ? "" : " wide"}${e.id === activeEp ? " on" : ""}${local ? " is-local" : ""}`}
+                    aria-current={e.id === activeEp ? "step" : undefined}
+                    aria-label={local ? `${e.title}（已下載）` : e.title}
+                    title={local ? `${e.title}（已下載）` : e.title}
+                    data-tv="1"
+                    disabled={cast.busy}
+                    onClick={() => pickEpisode(e.id)}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
             </div>
           </aside>
         ) : null}
@@ -491,7 +504,7 @@ export function Watch() {
                 <Link
                   key={t.slug}
                   className="chip actor"
-                  to={`${prefix}/c/${t.kind || "actresses"}/${encodeURIComponent(t.slug)}`}
+                  to={withSrc(`${prefix}/c/${t.kind || "actresses"}/${encodeURIComponent(t.slug)}`, source)}
                 >
                   {zhName(i, t.name)}
                 </Link>
@@ -504,12 +517,12 @@ export function Watch() {
           {data.genres.map((t, i) => t.browsable === false ? (
             <span key={t.slug} className="chip">{zhName(data.actresses.length + i, t.name)}</span>
           ) : (
-            <Link key={t.slug} className="chip" to={`${prefix}/c/${t.kind || "genres"}/${encodeURIComponent(t.slug)}`}>
+            <Link key={t.slug} className="chip" to={withSrc(`${prefix}/c/${t.kind || "genres"}/${encodeURIComponent(t.slug)}`, source)}>
               {zhName(data.actresses.length + i, t.name)}
             </Link>
           ))}
           {data.maker ? (
-            <Link className="chip" to={`${prefix}/c/makers/${encodeURIComponent(data.maker.slug)}`}>
+            <Link className="chip" to={withSrc(`${prefix}/c/makers/${encodeURIComponent(data.maker.slug)}`, source)}>
               {zhName(data.actresses.length + data.genres.length, data.maker.name)}
             </Link>
           ) : null}

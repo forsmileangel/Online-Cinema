@@ -9,7 +9,7 @@ import time
 import uuid as uuid_module
 from urllib.parse import parse_qs, urlparse
 
-from . import cast, catalog, db, hls_proxy, sites, next_buffer, offline
+from . import cast, cast_quality, catalog, db, hls_proxy, sites, next_buffer, offline, read_ahead
 from .security import SiteBusy, assert_hls_url, safe_video_id
 
 SERIES_SOURCES = {"hongguo", "chinaq", "gimy", "dramaq", "mmov", "mvffm"}
@@ -45,11 +45,18 @@ class PlaybackSession:
         self.checkpoint_state = None
         self.prefetched = None
         self.prefetching = False
+        # Stream choice for the receiver: highest rendition, 720p only when it keeps stalling.
+        self.renditions = None
+        self.upstream = ""
+        self.mime = ""
+        self.media_title = ""
+        self.governor = cast_quality.Governor(time.monotonic())
         self.snapshot = dict(uuid=self.uuid, session_id=self.id, content_id="", playing=False, paused=False,
                              idle=False, buffering=False, current_time=body.get("position_sec", 0), duration=0,
                              phase="waking" if body.get("wake") else "loading", error="", title=body.get("title", ""),
                              source=body.get("source", ""), video_id=body.get("video_id", ""),
-                             episode_id=body.get("episode_id", ""), autoplay_next=bool(body.get("autoplay_next")), playlist=body.get("url", ""), pending_action="")
+                             episode_id=body.get("episode_id", ""), autoplay_next=bool(body.get("autoplay_next")), playlist=body.get("url", ""), pending_action="",
+                             warning="", quality="source", quality_label="", quality_reason="", buffer_ahead=0)
 
     def get(self):
         with self.lock:
@@ -177,11 +184,31 @@ class PlaybackSession:
             return
         origin = cast.lan_media_origin(self.uuid)
         cast.check_media_origin(origin)
-        url = origin + offline.media_url(local_key) if local_key else hls_proxy.proxied_media(upstream, origin)
         mime = "video/mp4" if local_key or urlparse(upstream).path.lower().endswith(".mp4") else "application/vnd.apple.mpegurl"
-        self.publish(playlist=playlist, title=title, episode_id=episode)
         marker = f"{self.id}-{self.epoch}"
-        state = cast.play(url, mime, title, position, self.uuid, guard=self.valid, marker=marker, expected=cast.session_content(self.uuid, self.id) or self.snapshot["content_id"])
+        self.renditions, self.upstream, self.mime, self.media_title = None, upstream, mime, title
+        if not local_key and mime == "application/vnd.apple.mpegurl" and not cast.is_nest_hub(self.uuid):
+            try:
+                self.renditions = hls_proxy.renditions(upstream, time.monotonic() + 15)
+            except Exception:
+                self.renditions = None  # The receiver gets the original playlist.
+        best = (self.renditions or {}).get("best")
+        read_ahead.add_receiver(cast.device_host(self.uuid))  # This computer reads ahead for the receiver.
+        url = origin + offline.media_url(local_key) if local_key else hls_proxy.proxied_media(best["url"] if best else upstream, origin)
+        self.governor.reset(time.monotonic())
+        self.publish(playlist=playlist, title=title, episode_id=episode, warning="", quality="source",
+                     quality_label=f"{best['height']}p" if best and best["height"] else "", quality_reason="", buffer_ahead=0)
+        try:
+            state = cast.play(url, mime, title, position, self.uuid, guard=self.valid, marker=marker, expected=cast.session_content(self.uuid, self.id) or self.snapshot["content_id"])
+        except RuntimeError:
+            fallback = (self.renditions or {}).get("full_hd")
+            if not fallback or not self.valid():
+                raise
+            # A receiver without 4K decoding refuses the top rendition; 1080p still plays.
+            self.renditions["best"] = fallback
+            self.publish(quality_label=f"{fallback['height']}p")
+            url = hls_proxy.proxied_media(fallback["url"], origin)
+            state = cast.play(url, mime, title, position, self.uuid, guard=self.valid, marker=marker, expected=cast.session_content(self.uuid, self.id) or self.snapshot["content_id"])
         if not self.valid():
             return
         self.previous = state
@@ -216,11 +243,77 @@ class PlaybackSession:
             self.publish(**state, phase="stopped")
             return
         self.previous = state
-        self.publish(**state, phase="paused" if state.get("paused") else "buffering" if state.get("buffering") else "playing", error="")
+        ahead = read_ahead.status(self.receiver_marker())
+        self.publish(**state, phase="paused" if state.get("paused") else "buffering" if state.get("buffering") else "playing", error="",
+                     buffer_ahead=round(ahead["lead_seconds"]) if ahead else 0)
         self.save(state)
+        verdict = self.governor.observe(state, ahead, time.monotonic())
+        if verdict:
+            self.downshift(verdict)
+
+    def receiver_marker(self) -> str:
+        """Read-ahead is kept per receiver, found by its address."""
+        host = cast.device_host(self.uuid)
+        read_ahead.add_receiver(host)
+        return host
+
+    def downshift(self, cause: str):
+        """Drop to 720p only where that helps: a lower source rendition, or a TV-side bottleneck."""
+        lower = (self.renditions or {}).get("lower")
+        if cause == "upstream" and not lower:
+            # A 720p conversion still needs every source byte; it cannot help a slow source.
+            self.publish(quality_reason=cause, warning="片源速度跟不上，電腦已盡量預先緩衝；這部建議先離線下載")
+            return
+        try:
+            label = self._reload(lower["url"] if lower else None, convert=not lower)
+        except Exception as e:
+            self.publish(warning=f"改用 720p 失敗，維持原畫質：{e}")
+            return
+        self.publish(quality="720p", quality_label=label or "720p", quality_reason=cause,
+                     warning="片源速度不穩，已暫時改用 720p 播放" if cause == "upstream" else "電視端網路較慢，已暫時改用 720p 播放")
+
+    def restore_quality(self):
+        best = (self.renditions or {}).get("best")
+        label = self._reload(best["url"] if best else None)
+        self.governor.stop()  # The viewer chose this quality for the rest of the episode.
+        self.publish(quality="source", quality_label=label, quality_reason="", warning="")
+
+    def _reload(self, target: str | None, convert: bool = False) -> str:
+        """Play another rendition from the current position; returns its label."""
+        if not self.valid() or not self.upstream:
+            raise ValueError("目前的串流無法切換畫質")
+        position = float(self.snapshot.get("current_time") or 0)
+        origin = cast.lan_media_origin(self.uuid)
+        expected = cast.session_content(self.uuid, self.id) or self.snapshot["content_id"]
+        best = (self.renditions or {}).get("best")
+        source = target or (best["url"] if best else self.upstream)
+        self.epoch += 1
+        marker = f"{self.id}-{self.epoch}"
+        url = hls_proxy.proxied_media(source, origin)
+        transcoded = False
+        if convert:
+            # Same 720p path as the browser's: a 720p rendition when listed, else converted here.
+            url = hls_proxy.nesthub_media_url(url, time.monotonic() + 25, strict=True)
+            transcoded = parse_qs(urlparse(url).query).get("nesthub") == ["1"]
+            if transcoded:
+                url += "&web=1"
+        primed = parse_qs(urlparse(url).query).get("u", [source])[0]
+        try:
+            read_ahead.prime(self.receiver_marker(), primed, position, convert=transcoded, web=transcoded)
+        except Exception:
+            pass  # The receiver's own requests open the window.
+        state = cast.play(url, self.mime, self.media_title, position, self.uuid, guard=self.valid, marker=marker, expected=expected)
+        self.previous = state
+        self.governor.reset(time.monotonic())
+        self.publish(**state, phase="paused" if state.get("paused") else "playing", error="")
+        self.prefetch()
+        if transcoded:
+            return "720p（電腦轉檔）"
+        heights = [r["height"] for r in (self.renditions or {}).values() if r and r["url"] == source and r["height"]]
+        return f"{heights[0]}p" if heights else ("720p" if convert else "")
 
     def command(self, action: str, **values):
-        if action not in {"pause", "resume", "seek", "stop", "episode", "autoplay", "retry", "detach", "volume", "mute"}:
+        if action not in {"pause", "resume", "seek", "stop", "episode", "autoplay", "retry", "detach", "volume", "mute", "quality"}:
             raise ValueError("不支援的投放操作")
         if self.snapshot["phase"] == "replaced" and action not in {"detach", "stop"}:
             raise ValueError("電視已切換其他內容，請重新投放")
@@ -249,6 +342,11 @@ class PlaybackSession:
             self.stop_requested.clear()
             self.load(self.snapshot["episode_id"], self.snapshot["current_time"])
             return
+        if action == "quality":
+            self.restore_quality()
+            return
+        if action == "seek":
+            self.governor.seeked(time.monotonic())
         expected = cast.session_content(self.uuid, self.id) or self.snapshot["content_id"]
         if action == "stop" and not expected:
             self.publish(phase="stopped", playing=False, paused=False)

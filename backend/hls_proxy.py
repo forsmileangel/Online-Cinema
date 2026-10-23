@@ -10,7 +10,7 @@ from starlette.background import BackgroundTask
 from starlette.requests import Request
 from urllib.parse import urlparse
 
-from . import next_buffer
+from . import next_buffer, read_ahead
 from . import http_client, seg_cache, lan
 from .security import (
     UnsafeURL,
@@ -65,7 +65,7 @@ def _playlist_media_url(url: str, parent_host: str) -> str:
 
 
 def rewrite_playlist(text: str, base_url: str, origin: str = "", *, nesthub: bool = False, web: bool = False,
-                     segments: list[str] | None = None) -> str:
+                     segments: list[str] | None = None, durations: list[float] | None = None) -> str:
     if len(text) > 2_000_000:
         raise UnsafeURL("playlist too large")
     if nesthub:
@@ -73,14 +73,22 @@ def rewrite_playlist(text: str, base_url: str, origin: str = "", *, nesthub: boo
     parent_host = (urlparse(base_url).hostname or "").lower()
     # Media playlists report their validated segment order for prefetching.
     collect = segments is not None and "#EXTINF" in text
+    seconds = 0.0
     out: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
+        if stripped.startswith("#EXTINF:"):
+            try:
+                seconds = float(stripped[8:].split(",")[0])
+            except ValueError:
+                seconds = 0.0
         if stripped and not stripped.startswith("#"):
             abs_url = urljoin(base_url, stripped)
             validated = _playlist_media_url(abs_url, parent_host)
             if collect:
                 segments.append(validated)
+                if durations is not None:
+                    durations.append(seconds)
             out.append(proxied_media(abs_url, origin, nesthub=nesthub, web=web))
             continue
         if "URI=" in line:
@@ -187,6 +195,57 @@ def dlna_media_url(proxy_url: str, deadline: float, *, validate: bool = False) -
     return proxied_media(chosen, origin)
 
 
+def _variants(text: str, base_url: str) -> list[tuple[int, int, int, str]]:
+    """(width, height, bandwidth, url) of H.264 renditions with muxed audio."""
+    lines = text.splitlines()
+    external_audio = set()
+    for line in lines:
+        if line.startswith("#EXT-X-MEDIA:"):
+            attrs = {key: value.strip('"') for key, value in _ATTR.findall(line)}
+            if attrs.get("TYPE") == "AUDIO" and attrs.get("URI"):
+                external_audio.add(attrs.get("GROUP-ID"))
+    found, pending = [], None
+    for line in lines:
+        line = line.strip()
+        if line.startswith("#EXT-X-STREAM-INF:"):
+            pending = {key: value.strip('"') for key, value in _ATTR.findall(line)}
+        elif line and not line.startswith("#") and pending is not None:
+            attrs, pending = pending, None
+            codecs = [codec.strip() for codec in attrs.get("CODECS", "").lower().split(",")]
+            if attrs.get("AUDIO") in external_audio:
+                continue
+            if attrs.get("CODECS") and not any(codec.startswith(("avc1.", "avc3.")) for codec in codecs):
+                continue
+            size = re.fullmatch(r"(\d+)x(\d+)", attrs.get("RESOLUTION", ""))
+            bandwidth = attrs.get("BANDWIDTH", "0")
+            found.append((int(size[1]) if size else 0, int(size[2]) if size else 0,
+                          int(bandwidth) if bandwidth.isdigit() else 0, urljoin(base_url, line)))
+    return found
+
+
+def renditions(upstream_url: str, deadline: float) -> dict | None:
+    """The highest rendition for a receiver, plus a 720p-or-lower one to fall back to.
+
+    None when the playlist lists no usable renditions (a media playlist, or
+    only separate-audio / non-H.264 ones): the receiver then gets it as is.
+    """
+    upstream_url = assert_hls_url(upstream_url)
+    if not urlparse(upstream_url).path.lower().endswith(".m3u8"):
+        return None
+    text, base_url = _read_playlist(upstream_url, deadline)
+    found = _variants(text, base_url)
+    if not found:
+        return None
+    host = (urlparse(base_url).hostname or "").lower()
+    rank = lambda v: (v[0] * v[1], v[2])  # noqa: E731
+    best = max(found, key=rank)
+    lower = [v for v in found if 0 < v[1] <= 720 and v is not best]
+    full_hd = [v for v in found if 0 < v[1] <= 1080]
+    pick = lambda v: dict(url=_playlist_media_url(v[3], host), height=v[1]) if v else None  # noqa: E731
+    return dict(best=pick(best), lower=pick(max(lower, key=rank) if lower else None),
+                full_hd=pick(max(full_hd, key=rank) if full_hd and best[1] > 1080 else None))
+
+
 def _validate_nesthub_playlist(text: str) -> None:
     for line in text.splitlines():
         attrs = dict(_ATTR.findall(line))
@@ -265,19 +324,29 @@ def serve_media(request: Request, raw_url: str) -> Response:
     next_buffer.foreground(True)
     try:
         url = assert_hls_url(raw_url)
+        # A cast device's own requests (known by address) get the deeper read-ahead window.
+        rx = request.client.host if request.client and read_ahead.is_receiver(request.client.host) else ""
+        playlist = urlparse(url).path.lower().endswith(".m3u8")
+        if rx and not playlist:
+            # Before serving: the segments after this one start downloading now.
+            read_ahead.touch(url, rx, convert=request.query_params.get("nesthub") == "1",
+                             web=request.query_params.get("web") == "1")
         saved = offline.cached_part(url)
         if saved is None:
             saved = next_buffer.cached(url)
+        if saved is None and not playlist and request.headers.get("range"):
+            # Ranged segment requests (LG) are answered from the read-ahead copy too.
+            saved = seg_cache.get(url)
         if saved is not None:
             touch_media_host(url)
             path = urlparse(url).path.lower()
-            playlist = path.endswith(".m3u8")
             if playlist:
                 segments: list[str] = []
+                seconds: list[float] = []
                 text = rewrite_playlist(saved.decode("utf-8", "replace"), url, str(request.base_url).rstrip("/"),
                                         nesthub=request.query_params.get("nesthub") == "1", web=request.query_params.get("web") == "1",
-                                        segments=segments)
-                seg_cache.remember(segments)
+                                        segments=segments, durations=seconds)
+                seg_cache.remember(segments, seconds)
                 body = text.encode()
                 return Response(b"" if request.method == "HEAD" else body, media_type="application/vnd.apple.mpegurl",
                                 headers={"Cache-Control": "no-store", "Content-Length": str(len(body))})
@@ -386,7 +455,8 @@ def _serve_media(request: Request, raw_url: str) -> Response:
                 seg_cache.put(url, cached)
         else:
             touch_media_host(url)
-        seg_cache.enqueue_next(url)
+        if not (request.client and read_ahead.is_receiver(request.client.host)):
+            seg_cache.enqueue_next(url)  # Receivers get the deeper read_ahead window instead.
         if convert_segment:
             return _nesthub_segment(request, url, cached)
         return Response(cached, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
@@ -425,10 +495,11 @@ def _serve_media(request: Request, raw_url: str) -> Response:
         if not text.lstrip().startswith("#EXTM3U"):
             raise UnsafeURL("invalid playlist")
         segments: list[str] = []
+        seconds: list[float] = []
         # Absolute nested playlists, AES keys and map URIs work on both receivers.
         rewritten = rewrite_playlist(text, str(response.url), str(request.base_url).rstrip("/"), nesthub=nesthub,
-                                     web=request.query_params.get("web") == "1", segments=segments)
-        seg_cache.remember(segments)
+                                     web=request.query_params.get("web") == "1", segments=segments, durations=seconds)
+        seg_cache.remember(segments, seconds)
         body = rewritten.encode()
         # HEAD describes the rewritten GET representation. An empty Response
         # otherwise advertises Content-Length: 0 to LG's startup probe.

@@ -79,13 +79,15 @@ class OfflineRecoveryTests(unittest.TestCase):
         third = self.interrupted('3')
         fourth = offline.enqueue('gimy', 'test', '4')
         offline.cancel(first['id'])
-        offline.playback('gimy', 'test', '2')
+        offline.playback('gimy', 'test', '2')  # Playing does not stop a download.
         offline.delete([third['id']], {'gimy'})
         with patch.object(offline, '_queue', queue.Queue()):
             offline._maintenance_once()  # Simulate the other app; held lock must win.
-            self.assertTrue(offline._queue.empty())
+            recovered = [offline._queue.get_nowait() for _ in range(offline._queue.qsize())]
+        for _, handle in recovered:
+            offline._release(handle)
+        self.assertEqual([entry['id'] for entry, _ in recovered], [second['id']])
         self.assertEqual(offline.status(first['id'])['phase'], 'cancelled')
-        self.assertEqual(offline.status(second['id'])['phase'], 'cancelled')
         self.assertIsNone(offline.status(third['id']))
         self.assertEqual(offline.status(fourth['id'])['phase'], 'queued')
 
@@ -97,7 +99,7 @@ class OfflineRecoveryTests(unittest.TestCase):
             offline._maintenance_once()
         self.assertTrue(offline._queue.empty())
         offline.playback('gimy', 'test', '1')
-        self.assertTrue((offline._folder(offline.identity('gimy', 'test', '1')) / 'cancel').exists())
+        self.assertFalse((offline._folder(offline.identity('gimy', 'test', '1')) / 'cancel').exists())
         offline._maintenance_once()
         self.assertEqual([entry[0]['id'] for entry in offline._queue.queue], [third['id']])
 

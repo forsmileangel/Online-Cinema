@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 
-from . import db, lan
+from . import db, dlna, lan
 
 _lock = threading.RLock()
 
@@ -113,10 +113,14 @@ def wake_and_wait(uuid, valid, timeout=60):
             sock.sendto(packet, (address, 9))
     deadline = time.monotonic() + timeout
     while valid() and time.monotonic() < deadline:
-        devices = cast.discover(timeout=min(4, max(0.1, deadline - time.monotonic())))
-        if any(d["uuid"] == uuid and d.get("online") for d in devices):
-            return
-        time.sleep(min(1, max(0, deadline - time.monotonic())))
+        # Only this TV, every couple of seconds: it takes a cast as soon as it announces
+        # its renderer (measured ~15 s after the packet), not one full scan of every
+        # Chromecast later (~20 s). Matched by identity: the address may change on waking.
+        for renderer in dlna.discover(timeout=min(2, max(0.1, deadline - time.monotonic()))):
+            if renderer.uuid == uuid:
+                cast.adopt(renderer)
+                return
+        time.sleep(min(0.5, max(0, deadline - time.monotonic())))
     if not valid():
         raise RuntimeError("喚醒已取消")
     raise TimeoutError("已送出網路喚醒訊號，但電視未回應。請先用遙控器開機，再按「掃描電視」後投放；記住 MAC 不代表機型支援喚醒，請確認電視是否提供並已開啟網路待機設定。")

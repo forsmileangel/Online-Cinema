@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import type { Card } from "../types";
-import { useSource } from "../source";
+import { isPortrait, useSource } from "../source";
+import { rememberOpened } from "../hooks/useScrollRestore";
 
 const SRC_BADGE: Record<string, string> = {
   anigamer: "巴哈姆特動畫瘋",
@@ -25,8 +26,9 @@ function retriedCoverUrl(cover: string, token: string) {
   }
 }
 
-export function PosterCard({ item }: { item: Card }) {
+export function PosterCard({ item, onRemove, removeLabel = "移除" }: { item: Card; onRemove?: () => void; removeLabel?: string }) {
   const { prefix, zhMap } = useSource();
+  const loc = useLocation();
   const pct = item.progress && item.progress > 0.02 ? Math.round(item.progress * 100) : 0;
   const orig = item.original_title || item.title;
   const cover = (item.cover || "").trim();
@@ -58,11 +60,12 @@ export function PosterCard({ item }: { item: Card }) {
     });
   };
   const href = `${prefix}/watch/${encodeURIComponent(item.source || "hongguo")}/${encodeURIComponent(item.id)}`;
+  const opened = () => rememberOpened(loc.key, href);
   return (
-    <div className="card">
+    <div className={`card${isPortrait(item.source) ? " portrait" : ""}`}>
       <div className="poster-shell">
-        <Link className="poster-link" data-tv="1" to={href} aria-label={label}>
-          <div className="poster">
+        <Link className="poster-link" data-tv="1" to={href} aria-label={label} onClick={opened}>
+          <div className={`poster${isPortrait(item.source) ? " portrait" : ""}`}>
             {cover && !currentCoverState.failed ? (
               <img
                 key={`${cover}-${currentCoverState.token}`}
@@ -88,6 +91,18 @@ export function PosterCard({ item }: { item: Card }) {
             ) : null}
           </div>
         </Link>
+        {onRemove ? (
+          <button
+            className="card-remove"
+            type="button"
+            data-tv="1"
+            title={removeLabel}
+            aria-label={`${removeLabel}：${label}`}
+            onClick={onRemove}
+          >
+            ✕
+          </button>
+        ) : null}
         {cover && currentCoverState.failed ? (
           <button
             className="btn alt poster-retry"
@@ -100,8 +115,8 @@ export function PosterCard({ item }: { item: Card }) {
           </button>
         ) : null}
       </div>
-      <Link className="card-title-link" data-tv="1" to={href}>
-        <div className="title">{label}</div>
+      <Link className="card-title-link" data-tv="1" to={href} onClick={opened}>
+        <div className="title" title={label}>{label}</div>
       </Link>
       {item.source ? <div className="badge-src">{SRC_BADGE[item.source] || item.source}</div> : null}
     </div>

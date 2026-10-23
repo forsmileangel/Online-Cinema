@@ -11,10 +11,11 @@ from urllib.parse import quote, urlparse
 from bs4 import BeautifulSoup
 
 from .. import http_client, zh
-from ..hls_proxy import proxied_media
+from ..hls_proxy import dlna_media_url, proxied_media
 from ..models import Card, Episode, Listing, PickChip, PickGroup, Tag, VideoDetail
 from ..security import (
     SiteBusy,
+    SourceUnavailable,
     UnsafeURL,
     assert_image_url,
     final_url_still_allowed,
@@ -342,10 +343,25 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
         tokens.append(pick)
     tokens = _sort_tokens(_fill_numbered(tokens))
     master = ""
-    for src in _plays(video_id, pick):
-        master = _hls(src)
-        if master:
-            break
+    checked: Exception | None = None
+    deadline = time.monotonic() + 30
+    # A freshly listed episode can 404 on its first line while other lines already
+    # play, so check each playlist before choosing it. A refusal stops at once.
+    for src in _plays(video_id, pick)[:4]:
+        candidate = _hls(src)
+        if not candidate or time.monotonic() >= deadline:
+            continue
+        try:
+            dlna_media_url(candidate, deadline, validate=True)
+        except SiteBusy:
+            raise
+        except Exception as e:
+            checked = e
+            continue
+        master = candidate
+        break
+    if not master and checked:
+        raise SourceUnavailable("DramaQ 這一集的播放線路目前都打不開，可能還在上傳，請稍後再試。") from checked
     if not master:
         raise UnsafeURL("stream not found")
     episodes = [

@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 import { api } from "./api";
+import type { SourceInfo } from "./types";
 
-type Src = { id: string; label: string };
+type Src = SourceInfo;
 
 type Ctx = {
   source: string;
@@ -16,14 +17,15 @@ type Ctx = {
   queueZh: (text: string) => void;
 };
 
+// Shown until /api/settings answers; the server list is the source of truth.
 const DEFAULT_SOURCES: Src[] = [
-  { id: "anigamer", label: "巴哈姆特動畫瘋" },
-  { id: "hongguo", label: "紅果短劇" },
-  { id: "chinaq", label: "中國人線上看" },
-  { id: "gimy", label: "Gimy 劇迷" },
-  { id: "mmov", label: "MMOV 電影線上看" },
-  { id: "mvffm", label: "MVFFM 電影線上看" },
-  { id: "dramaq", label: "DramaQ" },
+  { id: "mvffm", label: "MVFFM 電影線上看", group: "影劇" },
+  { id: "chinaq", label: "中國人線上看", group: "影劇" },
+  { id: "gimy", label: "Gimy 劇迷", group: "影劇" },
+  { id: "mmov", label: "MMOV 電影線上看", group: "影劇" },
+  { id: "dramaq", label: "DramaQ", group: "影劇" },
+  { id: "hongguo", label: "紅果短劇", group: "短劇" },
+  { id: "anigamer", label: "巴哈姆特動畫瘋", group: "動畫" },
 ];
 
 const SourceCtx = createContext<Ctx>({
@@ -150,3 +152,39 @@ export function SourceProvider({ children }: { children: ReactNode }) {
 export function useSource() {
   return useContext(SourceCtx);
 }
+
+export function sourceGroup(sources: Src[], id: string) {
+  return sources.find((s) => s.id === id)?.group || "";
+}
+
+export function sourceLabel(sources: Src[], id: string) {
+  return sources.find((s) => s.id === id)?.label || id;
+}
+
+/** Listing links carry their source so Back and saved links never land on another site's list. */
+export function withSrc(path: string, src: string) {
+  return `${path}${path.includes("?") ? "&" : "?"}src=${encodeURIComponent(src)}`;
+}
+
+/** The source a search or list page shows: its ?src= when valid, otherwise the selected source. */
+export function usePageSource() {
+  const { source, sources } = useSource();
+  const { pathname } = useLocation();
+  const [params] = useSearchParams();
+  const listPage = pathname.endsWith("/search") || pathname.includes("/c/");
+  // A video page shows the source of the video, not the globally chosen one.
+  const watching = /\/watch\/([^/]+)\//.exec(pathname)?.[1];
+  const wanted = watching ? decodeURIComponent(watching) : listPage ? params.get("src") || "" : "";
+  return wanted && sources.some((s) => s.id === wanted) ? wanted : source;
+}
+
+export function searchHint(group: string) {
+  if (group === "成人影片") return "搜尋番號、女優、關鍵字";
+  if (group === "影劇") return "搜尋片名、演員、關鍵字";
+  if (group === "動畫") return "搜尋動畫名稱";
+  return "搜尋劇名、關鍵字";
+}
+
+/** Sources whose covers are posters (measured 2:3 to 4:5); the rest are 16:9 or 3:2 stills. */
+const PORTRAIT_SOURCES = new Set(["hongguo", "huangguo", "huangguo2", "duanju51", "chinaq", "gimy", "mmov", "mvffm", "dramaq"]);
+export const isPortrait = (source?: string) => !!source && PORTRAIT_SOURCES.has(source);

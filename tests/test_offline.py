@@ -19,7 +19,7 @@ class OfflineTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         for obj, name, value in [(offline, 'ROOT', Path(tmp.name)), (offline, '_queue', queue.Queue(offline._queue.maxsize)),
-                                 (offline, '_started', True), (offline, '_maintenance_started', True), (offline, '_cleanup_check_at', 0), (offline, '_playback_parts', {}), (security, '_extra_media_hosts', {}),
+                                 (offline, '_started', True), (offline, '_maintenance_started', True), (offline, '_cleanup_check_at', 0), (offline, '_sweep_at', 0), (offline, '_playback_parts', {}), (security, '_extra_media_hosts', {}),
                                  (security, '_extra_media_sources', {})]:
             p = patch.object(obj, name, value); p.start(); self.addCleanup(p.stop)
         p = patch.object(security, '_assert_not_private'); p.start(); self.addCleanup(p.stop)
@@ -510,15 +510,16 @@ class OfflineTests(unittest.TestCase):
         offline._maintenance_once()
         self.assertIsNone(offline.status(item['id']))
 
-    def test_playback_cancels_only_matching_job_and_resolution_does_not_cancel(self):
+    def test_playback_keeps_the_download_running(self):
         first, second = [offline.enqueue('gimy', 'test', str(i)) for i in (1, 2)]
         try:
             with patch.object(offline.sites, 'get', return_value=Mock(fetch_video=lambda video_id: self.detail)):
                 offline.fetch_detail('gimy', 'test', '1')
             self.assertEqual(offline.status(first['id'])['phase'], 'queued')
+            # Watching an episode that is downloading must not throw the download away.
             main.offline_playback(main.OfflineIn(source='gimy', video_id='test', episode='1'))
-            self.assertEqual(offline.status(first['id'])['phase'], 'cancelled')
-            self.assertIn('已開始播放此集', offline.status(first['id'])['error'])
+            self.assertEqual(offline.status(first['id'])['phase'], 'queued')
+            self.assertFalse((offline._folder(first['id']) / 'cancel').exists())
             self.assertEqual(offline.status(second['id'])['phase'], 'queued')
             offline.playback('hongguo', 'test', '2')
             self.assertEqual(offline.status(second['id'])['phase'], 'queued')
@@ -556,13 +557,13 @@ class OfflineTests(unittest.TestCase):
         offline.delete([job['id']], {'gimy'})
         self.assertIsNone(offline.cached_part(segment_url))
 
-    def test_cast_selection_cancels_download_without_touching_next_episode(self):
+    def test_cast_selection_keeps_downloads_queued(self):
         first, second = [offline.enqueue('gimy', 'test', str(i)) for i in (1, 2)]
         session = cast_session.PlaybackSession(dict(uuid='test-tv', source='gimy', video_id='test', episode_id='1', autoplay_next=False))
         try:
             with patch.object(offline, 'fetch_detail', return_value=self.detail), patch.object(cast_session.cast, 'lan_media_origin', return_value='http://192.168.1.2:6970'), patch.object(cast_session.cast, 'check_media_origin'), patch.object(cast_session.cast, 'session_content', return_value=''), patch.object(cast_session.cast, 'play', return_value={'playing': True, 'duration': 0}):
                 session._load('1')
-            self.assertEqual(offline.status(first['id'])['phase'], 'cancelled')
+            self.assertEqual(offline.status(first['id'])['phase'], 'queued')
             self.assertEqual(offline.status(second['id'])['phase'], 'queued')
         finally:
             while not offline._queue.empty():

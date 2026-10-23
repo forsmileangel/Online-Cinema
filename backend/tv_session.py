@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+import threading
+import time
 
 from . import db
 
@@ -39,6 +41,35 @@ def valid_cookie(value: str | None) -> bool:
     if not value:
         return False
     return hmac.compare_digest(value, cookie_token())
+
+
+_attempt_lock = threading.Lock()
+_failures: dict[str, list[float]] = {}
+ATTEMPT_LIMIT = 5
+ATTEMPT_WINDOW = 60.0
+
+
+def retry_after(client: str) -> int:
+    """Seconds a client must wait after too many wrong codes (0 = may try)."""
+    now = time.monotonic()
+    with _attempt_lock:
+        recent = [t for t in _failures.get(client, []) if now - t < ATTEMPT_WINDOW]
+        _failures[client] = recent
+        if len(recent) < ATTEMPT_LIMIT:
+            return 0
+        return max(1, int(ATTEMPT_WINDOW - (now - recent[0])) + 1)
+
+
+def record_failure(client: str) -> None:
+    with _attempt_lock:
+        _failures.setdefault(client, []).append(time.monotonic())
+        if len(_failures) > 256:
+            _failures.pop(next(iter(_failures)))
+
+
+def clear_failures(client: str) -> None:
+    with _attempt_lock:
+        _failures.pop(client, None)
 
 
 def valid_code(raw: str) -> bool:

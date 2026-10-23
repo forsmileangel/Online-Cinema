@@ -7,10 +7,14 @@ export function PosterRow({
   title,
   to,
   items,
+  moreLabel = "更多",
+  note,
 }: {
   title: string;
   to?: string;
   items: Card[];
+  moreLabel?: string;
+  note?: string | null;
 }) {
   const { prefix } = useSource();
   if (!items.length) return null;
@@ -21,13 +25,14 @@ export function PosterRow({
         <h2>{title}</h2>
         {href ? (
           <Link className="more" to={href} data-tv="1">
-            更多
+            {moreLabel}
           </Link>
         ) : null}
       </div>
+      {note ? <p className="row-note">{note}</p> : null}
       <div className="scroller">
         {items.map((item) => (
-          <PosterCard key={item.id} item={item} />
+          <PosterCard key={`${item.source || ""}:${item.id}`} item={item} />
         ))}
       </div>
     </section>

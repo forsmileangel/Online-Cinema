@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..catalog import DEFAULT_SOURCE, SOURCE_LABELS, normalize_source
+from ..catalog import DEFAULT_SOURCE, GROUP_ORDER, SOURCE_GROUPS, SOURCE_LABELS, normalize_source
 from . import anigamer
 from . import chinaq
 from . import dramaq
@@ -28,4 +28,7 @@ def get(source: str | None):
 
 
 def available() -> list[dict[str, str]]:
-    return [{"id": k, "label": SOURCE_LABELS.get(k, k)} for k in _SITES]
+    rank = {group: i for i, group in enumerate(GROUP_ORDER)}
+    # Stable sort: registry order is kept inside each group.
+    ids = sorted(_SITES, key=lambda k: rank.get(SOURCE_GROUPS.get(k, ""), len(rank)))
+    return [{"id": k, "label": SOURCE_LABELS.get(k, k), "group": SOURCE_GROUPS.get(k, "")} for k in ids]

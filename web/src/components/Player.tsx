@@ -776,7 +776,7 @@ export function Player({
   const shownVol = casting ? volumeDraft ?? (remoteMuted ? 0 : remoteLevel ?? 0) : muted ? 0 : vol;
   const shownMuted = casting ? remoteMuted : muted;
   const castQuality = new URLSearchParams(remote?.status?.content_id.split("?")[1] || "").get("nesthub") === "1"
-    ? "最高 720p" : levels.length === 1 ? `${levels[0].h}p` : "投放自動";
+    ? "最高 720p" : remote?.status?.quality_label ? `投放 ${remote.status.quality_label}` : levels.length === 1 ? `${levels[0].h}p` : "投放最高畫質";
 
   const waiting = casting ? !!(remote?.busy || remote?.status?.buffering) : qualityBusy || (!qualityError && !playError && !notice && loadingShown);
   const pill = casting ? (waiting ? "等待電視確認" : "") : qualityBusy ? "正在準備 720p…" : qualityError || playError || notice || (loadingShown ? "載入中" : "");
@@ -846,7 +846,7 @@ export function Player({
             <span className="times">
               {casting ? "電視 " : ""}{fmt(shownT)} / {fmt(duration)}
             </span>
-            {!casting || hasRemoteVolume ? <div className="vol" onClick={(e) => e.stopPropagation()}
+            {!casting || hasRemoteVolume ? <div className={`vol${casting ? " cast" : ""}`} onClick={(e) => e.stopPropagation()}
               title={casting ? remote?.status?.volume_scope === "stream" ? "影片音量；電視本身音量仍由遙控器調整" : "投放裝置音量" : "本機音量"}>
               <button type="button" disabled={casting && !remote?.canMute} onClick={toggleMute}
                 aria-label={casting ? shownMuted || shownVol === 0 ? "取消投放靜音" : "投放靜音" : muted ? "取消靜音" : "靜音"} title="靜音 (M)">
@@ -894,7 +894,7 @@ export function Player({
             </select> : <span className="quality-status" aria-label="播放畫質">{videoHeight ? `來源 ${videoHeight}p` : "來源畫質"}</span>}
             <div className="fs-col" onClick={(e) => e.stopPropagation()}>
               <button type="button" onClick={(e) => { e.stopPropagation(); toggleFs(); }}>
-                全螢幕
+                <span className="lbl">全螢幕</span><span className="ico" aria-hidden>⛶</span>
               </button>
               {onToggleFav ? (
                 <button
@@ -908,7 +908,7 @@ export function Player({
                     onToggleFav();
                   }}
                 >
-                  {favorited ? "已收藏" : "收藏"}
+                  <span className="lbl">{favorited ? "已收藏" : "收藏"}</span><span className="ico" aria-hidden>{favorited ? "♥" : "♡"}</span>
                 </button>
               ) : null}
             </div>

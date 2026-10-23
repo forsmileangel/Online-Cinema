@@ -166,6 +166,7 @@ class TranslateOut(BaseModel):
 class SourceInfo(BaseModel):
     id: str
     label: str
+    group: str = ""
 
 
 class SettingsOut(BaseModel):
@@ -200,6 +201,9 @@ class OfflineIn(BaseModel):
     episode: str = Field(default="", max_length=16)
     height: Literal[0, 720] = 720
     restart: bool = False
+    # Shown in the queue until the source detail is fetched.
+    title: str = Field(default="", max_length=200)
+    episode_title: str = Field(default="", max_length=100)
 
 
 class OfflineDeleteIn(BaseModel):

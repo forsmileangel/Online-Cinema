@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend.security import UnsafeURL, assert_hls_url, assert_image_url
+from backend.security import SiteBusy, SourceUnavailable, UnsafeURL, assert_hls_url, assert_image_url
 from backend.sites import available, dramaq
 
 
@@ -88,7 +88,7 @@ class DramaqTests(unittest.TestCase):
         ]
         with patch.object(dramaq, "_get", side_effect=fake_get), patch.object(dramaq, "_plays", return_value=plays), patch.object(
             dramaq, "proxied_media", side_effect=lambda url: "/api/hls?u=" + url
-        ):
+        ), patch.object(dramaq, "dlna_media_url"):
             detail = dramaq.fetch_video("202690895")
         self.assertEqual(detail.title, "未來全明星 第八季(All American Season 8)")
         self.assertEqual(detail.release_date, "2026")
@@ -97,6 +97,29 @@ class DramaqTests(unittest.TestCase):
         self.assertIn("bfvvs.com", detail.playlist)
         self.assertTrue(detail.episodes[0].playlist)
         self.assertFalse(detail.episodes[11].playlist)
+
+    def test_dead_first_line_falls_back_but_refusal_stops(self):
+        def fake_get(path: str) -> str:
+            return load("dramaq_detail.html") if path.startswith("/detail/") else load("dramaq_play.html")
+
+        plays = ["https://hn.bfvvs.com/dead/index.m3u8", "https://hn.bfvvs.com/live/index.m3u8"]
+
+        def check(url, deadline, validate=False):
+            if "dead" in url:
+                raise OSError("HTTP Error 404")
+            return url
+
+        with patch.object(dramaq, "_get", side_effect=fake_get), patch.object(dramaq, "_plays", return_value=plays),                 patch.object(dramaq, "proxied_media", side_effect=lambda url: "/api/hls?u=" + url):
+            with patch.object(dramaq, "dlna_media_url", side_effect=check) as checker:
+                self.assertIn("/live/", dramaq.fetch_video("202690895").playlist)
+            self.assertEqual(checker.call_count, 2)
+            with patch.object(dramaq, "dlna_media_url", side_effect=SiteBusy("DramaQ", 429, 30)) as checker:
+                with self.assertRaises(SiteBusy):
+                    dramaq.fetch_video("202690895")
+            self.assertEqual(checker.call_count, 1)
+            with patch.object(dramaq, "dlna_media_url", side_effect=OSError("HTTP Error 404")):
+                with self.assertRaises(SourceUnavailable):
+                    dramaq.fetch_video("202690895")
 
     def test_cdn_and_cover_hosts_are_allowed(self):
         with patch("backend.security._assert_not_private"):

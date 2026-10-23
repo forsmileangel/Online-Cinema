@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { Pager } from "../components/Pager";
-import { PosterGrid } from "../components/PosterGrid";
+import { PosterGrid, SkeletonGrid } from "../components/PosterGrid";
 import { api } from "../api";
-import { useSource } from "../source";
-import type { Listing } from "../types";
+import { useListing } from "../hooks/useListing";
+import { useScrollRestore } from "../hooks/useScrollRestore";
+import { usePageSource } from "../source";
 
 const TITLES: Record<string, string> = {
   new: "最新上架",
@@ -53,36 +53,43 @@ const TITLES: Record<string, string> = {
 };
 
 export function Browse() {
-  const { source } = useSource();
+  const source = usePageSource();
   const { kind = "", slug } = useParams();
-  const [page, setPage] = useState(1);
-  const [data, setData] = useState<Listing | null>(null);
-  const [err, setErr] = useState("");
-  const [retry, setRetry] = useState(0);
+  const [params, setParams] = useSearchParams();
+  const page = Math.max(1, Math.floor(Number(params.get("page")) || 1));
+  const list = `${source}\n${kind}\n${slug || ""}`;
+  const { data, err, busy, ready, retry } = useListing(
+    `${list}\n${page}`,
+    list,
+    () => api.peekBrowse(kind, slug, page, source),
+    (signal) => api.browse(kind, slug, page, source, signal),
+  );
+  useScrollRestore(ready);
 
-  useEffect(() => {
-    setPage(1);
-  }, [kind, slug, source]);
+  function setPage(n: number) {
+    const next = new URLSearchParams(params);
+    if (n > 1) next.set("page", String(n));
+    else next.delete("page");
+    setParams(next);
+  }
 
-  useEffect(() => {
-    setErr("");
-    setData(null);
-    const controller = new AbortController();
-    api
-      .browse(kind, slug, page, source, controller.signal)
-      .then((next) => { if (!controller.signal.aborted) setData(next); })
-      .catch((e: Error) => { if (!controller.signal.aborted) setErr(e.message); });
-    return () => controller.abort();
-  }, [kind, slug, page, source, retry]);
-
-  if (err) return <div className="err">{err}。<button className="btn alt" type="button" onClick={() => setRetry(retry + 1)}>重新載入</button></div>;
-  if (!data) return <div className="empty">載入中…</div>;
-  const heading = data.title || (slug ? decodeURIComponent(slug) : "") || TITLES[kind] || kind;
+  if (err) return <div className="err">{err}。<button className="btn alt" type="button" onClick={retry}>重新載入</button></div>;
+  const heading = data?.title || (slug ? decodeURIComponent(slug) : "") || TITLES[kind] || kind;
+  if (!data) {
+    return (
+      <div>
+        <h1 className="h1">{heading}</h1>
+        <SkeletonGrid large count={6} />
+      </div>
+    );
+  }
 
   return (
     <div>
       <h1 className="h1">{heading}</h1>
-      <PosterGrid items={data.items} large />
+      {data.notice ? <p className="muted" role="status">{data.notice}</p> : null}
+      {busy ? <p className="muted" role="status">載入第 {page} 頁…</p> : null}
+      <PosterGrid items={data.items} large busy={busy} />
       <Pager page={page} pages={data.pages} hasNext={data.has_next} onPage={setPage} />
     </div>
   );

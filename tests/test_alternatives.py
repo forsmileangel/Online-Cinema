@@ -26,6 +26,12 @@ class AlternativesTests(unittest.TestCase):
         for label, number in (("第7集", 7), ("第 07 集", 7), ("7", 7), ("EP07", 7), ("第3話", 3), ("正片", None)):
             self.assertEqual(alternatives.episode_number(label), number, label)
         self.assertEqual(alternatives.episode_number("正片", "12"), 12)
+        # One upload can hold several episodes; it covers the whole range, not just its first number.
+        self.assertEqual(alternatives.episode_number("《某劇》第6-7集", "6"), 6)
+        self.assertEqual(alternatives.episode_span("第6-7集", "6"), (6, 7))
+        self.assertEqual(alternatives.episode_span("第 1 ～ 3 集"), (1, 3))
+        self.assertEqual(alternatives.episode_span("第8集", "7"), (8, 8))
+        self.assertEqual(alternatives.episode_span("第9-2集", "9"), (9, 9))
         self.assertEqual(alternatives._core("中頭獎還是要上班 로또 1등도 출근합니다"), alternatives._core("中头奖还是要上班"))
         self.assertEqual(alternatives._core("某劇(2026)"), alternatives._core("某劇"))
         self.assertEqual([alternatives._season(t) for t in ("某劇", "某劇 第一季", "某劇 第2季", "某劇 第十二季", "某劇 Season 3")],

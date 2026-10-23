@@ -19,8 +19,23 @@ _SEASON = re.compile(r"第\s*([0-9一二三四五六七八九十]{1,3})\s*[季�
 _YEAR = re.compile(r"[（(]\s*\d{4}\s*[)）]")
 
 
+_SPAN = re.compile(r"第\s*0*(\d{1,4})\s*[-–—~～至到]\s*0*(\d{1,4})\s*[集話话]")
+
+
+def episode_span(title: str, episode_id: str = "") -> tuple[int, int] | None:
+    """First and last episode one entry covers: a merged upload is labelled 第1-3集."""
+    match = _SPAN.search(title or "")
+    if match and 0 <= int(match[2]) - int(match[1]) <= 50:
+        return int(match[1]), int(match[2])
+    number = episode_number(title, episode_id)
+    return (number, number) if number is not None else None
+
+
 def episode_number(title: str, episode_id: str = "") -> int | None:
-    """第7集 / 第 07 集 / 7 / EP7, from the label or else the id."""
+    """第7集 / 第 07 集 / 7 / EP7 (第1-3集 counts as 1), from the label or else the id."""
+    match = _SPAN.search(title or "")
+    if match:
+        return int(match[1])
     for text in (title or "", episode_id or ""):
         match = (re.fullmatch(r"\s*(?:第\s*)?0*(\d{1,4})\s*(?:集|話|话)?\s*", text)
                  or re.search(r"第\s*0*(\d{1,4})\s*[集話话]", text)
@@ -73,9 +88,10 @@ def find(source: str, video_id: str, title: str) -> list[dict]:
         found = sites.get(src).fetch_video(card.id)
         numbered = {}
         for ep in found.episodes:
-            number = episode_number(ep.title, ep.id)
-            if number is not None:
-                numbered.setdefault(number, ep.id)
+            span = episode_span(ep.title, ep.id)
+            if span is not None:
+                for number in range(span[0], span[1] + 1):
+                    numbered.setdefault(number, ep.id)
         return dict(source=src, label=SOURCE_LABELS.get(src, src), id=card.id, title=found.title or card.title,
                     count=len(found.episodes), episodes=sorted([n, ep_id] for n, ep_id in numbered.items()))
 

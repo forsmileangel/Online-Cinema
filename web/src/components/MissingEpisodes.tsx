@@ -4,8 +4,22 @@ import { api } from "../api";
 import { useSource } from "../source";
 import type { Alternative, Episode } from "../types";
 
-/** 第7集 / 第 07 集 / 7 / EP7, from the label or else the id (same rules as the server). */
+const SPAN = /第\s*0*(\d{1,4})\s*[-–—~～至到]\s*0*(\d{1,4})\s*[集話话]/;
+
+/** First and last episode one entry covers: a merged upload is labelled 第1-3集 (same rules as the server). */
+export function episodeSpan(title: string, id: string): [number, number] | null {
+  const match = SPAN.exec(title || "");
+  if (match && Number(match[2]) - Number(match[1]) >= 0 && Number(match[2]) - Number(match[1]) <= 50) {
+    return [Number(match[1]), Number(match[2])];
+  }
+  const n = episodeNumber(title, id);
+  return n === null ? null : [n, n];
+}
+
+/** 第7集 / 第 07 集 / 7 / EP7 (第1-3集 counts as 1), from the label or else the id (same rules as the server). */
 export function episodeNumber(title: string, id: string): number | null {
+  const span = SPAN.exec(title || "");
+  if (span) return Number(span[1]);
   for (const text of [title || "", id || ""]) {
     const match = /^\s*(?:第\s*)?0*(\d{1,4})\s*(?:集|話|话)?\s*$/.exec(text) || /第\s*0*(\d{1,4})\s*[集話话]/.exec(text)
       || /^\s*ep?\s*0*(\d{1,4})\s*$/i.exec(text);
@@ -16,10 +30,13 @@ export function episodeNumber(title: string, id: string): number | null {
 
 /** Numbers below the last episode that the list skips; empty when the labels are not all numbers. */
 export function missingEpisodes(episodes: Episode[]): number[] {
-  const numbers = episodes.map((e) => episodeNumber(e.title, e.id));
-  if (!numbers.length || numbers.some((n) => n === null)) return [];
-  const have = new Set(numbers as number[]);
-  const top = Math.max(...(numbers as number[]));
+  const spans = episodes.map((e) => episodeSpan(e.title, e.id));
+  if (!spans.length || spans.some((s) => s === null)) return [];
+  const have = new Set<number>();
+  for (const [first, last] of spans as [number, number][]) {
+    for (let n = first; n <= last; n++) have.add(n);
+  }
+  const top = Math.max(...(spans as [number, number][]).map(([, last]) => last));
   if (top > 400) return [];
   return Array.from({ length: top }, (_, i) => i + 1).filter((n) => !have.has(n));
 }

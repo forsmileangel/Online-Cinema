@@ -27,11 +27,11 @@ class PairingTests(unittest.TestCase):
 
     def cookies(self):
         token = tv_session.cookie_token()
-        return f"missav_tv={token}; cinema_tv={token}"
+        return f"midnight_tv={token}; cinema_tv={token}"
 
     def test_status_tells_a_lan_device_whether_it_needs_the_code(self):
         self.assertEqual(main.tv_status(request()), {"paired": False})
-        self.assertEqual(main.tv_status(request(cookie="missav_tv=wrong; cinema_tv=wrong")), {"paired": False})
+        self.assertEqual(main.tv_status(request(cookie="midnight_tv=wrong; cinema_tv=wrong")), {"paired": False})
         self.assertEqual(main.tv_status(request(cookie=self.cookies())), {"paired": True})
         self.assertEqual(main.tv_status(request("127.0.0.1")), {"paired": True})  # This PC never needs it.
 

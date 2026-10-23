@@ -1,8 +1,8 @@
-# 全來源繁簡／異體字搜尋檢查 — 給 Codex 的修改說明（MissAV＋線上電影院）
+# 全來源繁簡／異體字搜尋檢查 — 給 Codex 的修改說明（深夜電影院＋線上電影院）
 
-> 給 Codex 的修改說明（MissAV 與線上電影院兩個 repo 各放一份，內容相同）。所有數據都在 2026-10-09 用各 app 自己的 adapter 實際打站方測得。
+> 給 Codex 的修改說明（深夜電影院 與線上電影院兩個 repo 各放一份，內容相同）。所有數據都在 2026-10-09 用各 app 自己的 adapter 實際打站方測得。
 > **前置條件**：兩個 repo 目前有我還沒 commit 的修改，Codex 開工前要先 commit：
-> - MissAV：`backend/zh.py` 改用 `tw2s`／`s2tw`、紅果封面修正等。
+> - 深夜電影院：`backend/zh.py` 改用 `tw2s`／`s2tw`、紅果封面修正等。
 > - 線上電影院：移植了 `backend/zh.py`、紅果繁簡搜尋與封面修正，`requirements.txt` 加了 opencc。
 > 這份文件的修法都建立在 `backend/zh.py` 上。
 
@@ -10,7 +10,7 @@
 
 使用者用台灣繁體搜尋。前兩份文件已經修好 51短劇、紅果、黃果，這次把**兩個 app 的所有來源**都檢查一遍，看還有沒有繁體搜不到、或搜到比較少的情況。
 
-兩個 app 共用的 adapter（anigamer、chinaq、gimy、mmov、mvffm、hongguo）程式碼**完全相同**（只差換行字元），所以只在 MissAV 測一次，修改要**兩邊都套用**。dramaq 只有線上電影院有。
+兩個 app 共用的 adapter（anigamer、chinaq、gimy、mmov、mvffm、hongguo）程式碼**完全相同**（只差換行字元），所以只在 深夜電影院 測一次，修改要**兩邊都套用**。dramaq 只有線上電影院有。
 
 ## 檢查結果
 
@@ -23,13 +23,13 @@
 | **mmov** | 兩邊 | 繁體正常（慶餘年 32、長相思 33）；簡體全部 0；「鬥羅大陸」0 vs「斗羅大陸」36 | **要修**：異體字查不到。0 筆時改用正規化後的繁體字再查一次 |
 | anigamer | 兩邊 | 繁體正常（進擊的巨人 18）；簡體全部 0 | 可選（P3）：只影響簡體輸入 |
 | mvffm | 兩邊 | 繁體 ≥ 簡體（慶餘年 36+ vs 18、與鳳行 19 vs 4） | 不用改 |
-| missav、123av、pornhub | MissAV | 繁簡結果相同 | 不用改 |
-| netflav、ininav | MissAV | 繁體多很多（ininav 國產 1496 頁 vs 国产 5 筆） | 不用改 |
-| javday、huangguo2 | MissAV | 前一份已確認繁體沒問題 | 不用改 |
-| duanju51、hongguo、huangguo | MissAV（hongguo 兩邊） | 前兩份已修 | 已完成 |
+| missav、123av、pornhub | 深夜電影院 | 繁簡結果相同 | 不用改 |
+| netflav、ininav | 深夜電影院 | 繁體多很多（ininav 國產 1496 頁 vs 国产 5 筆） | 不用改 |
+| javday、huangguo2 | 深夜電影院 | 前一份已確認繁體沒問題 | 不用改 |
+| duanju51、hongguo、huangguo | 深夜電影院（hongguo 兩邊） | 前兩份已修 | 已完成 |
 | **gimy** | 兩邊 | 首頁正常，但搜尋頁 `/find/` 回 Cloudflare JS 驗證（403「Just a moment...」） | **無法測**。這是另一個問題：目前 gimy 的搜尋**全部失敗**，不在這份範圍 |
-| **jable** | MissAV | 搜尋頁回 Cloudflare 429「Access denied」（首頁正常；可能是我連續測試觸發的） | **無法測**，之後再測 |
-| **avple** | MissAV | 整站 403 | **無法測**。少數成功的請求裡，繁體「護士」有 100 頁 |
+| **jable** | 深夜電影院 | 搜尋頁回 Cloudflare 429「Access denied」（首頁正常；可能是我連續測試觸發的） | **無法測**，之後再測 |
+| **avple** | 深夜電影院 | 整站 403 | **無法測**。少數成功的請求裡，繁體「護士」有 100 頁 |
 
 ## 修改
 

@@ -1,34 +1,38 @@
-import { isPortrait, useSource } from "../source";
+import { isPortrait } from "../source";
 import type { Card } from "../types";
 import { PosterCard } from "./PosterCard";
 
+/** The card shape a list needs: all posters, all stills, or a mix of both. */
+export function gridShape(items: Card[]): "" | " portrait" | " mixed" {
+  const portrait = items.every((item) => isPortrait(item.source));
+  if (portrait) return " portrait";
+  return items.some((item) => isPortrait(item.source)) ? " mixed" : "";
+}
+
 export function PosterGrid({
   items,
-  large = false,
   busy = false,
   empty = "沒有找到影片。",
   onRemove,
   removeLabel,
 }: {
   items: Card[];
-  large?: boolean;
   /** Another page is loading; the current cards stay visible but dimmed. */
   busy?: boolean;
   empty?: string;
   onRemove?: (item: Card) => void;
   removeLabel?: string;
 }) {
-  const { tv } = useSource();
   if (!items.length) return <div className="empty">{empty}</div>;
-  // Big cards are for a TV across the room; elsewhere the usual density shows more titles.
-  const portrait = items.every((item) => isPortrait(item.source));
-  const mixed = !portrait && items.some((item) => isPortrait(item.source));
+  // A source name under every card only helps when the list mixes sources.
+  const showSource = new Set(items.map((item) => item.source || "")).size > 1;
   return (
-    <div className={`grid${large && tv ? " large" : ""}${portrait ? " portrait" : mixed ? " mixed" : ""}${busy ? " is-busy" : ""}`} aria-busy={busy || undefined}>
+    <div className={`grid${gridShape(items)}${busy ? " is-busy" : ""}`} aria-busy={busy || undefined}>
       {items.map((item) => (
         <PosterCard
           key={`${item.source || ""}:${item.id}`}
           item={item}
+          showSource={showSource}
           onRemove={onRemove ? () => onRemove(item) : undefined}
           removeLabel={removeLabel}
         />
@@ -47,9 +51,9 @@ function SkeletonCard() {
   );
 }
 
-export function SkeletonGrid({ large = false, count = 12 }: { large?: boolean; count?: number }) {
+export function SkeletonGrid({ count = 12 }: { count?: number }) {
   return (
-    <div className={`grid${large ? " large" : ""}`} aria-hidden>
+    <div className="grid" aria-hidden>
       {Array.from({ length: count }, (_, i) => <SkeletonCard key={i} />)}
     </div>
   );

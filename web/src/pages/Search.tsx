@@ -87,7 +87,7 @@ function SourceResults({ q, src, page }: { q: string; src: string; page: number 
     return (
       <div>
         <p className="muted" role="status">搜尋中…</p>
-        <SkeletonGrid large count={6} />
+        <SkeletonGrid />
       </div>
     );
   }
@@ -96,7 +96,7 @@ function SourceResults({ q, src, page }: { q: string; src: string; page: number 
       {data.notice ? <p className="muted" role="status">{data.notice}</p> : null}
       {busy ? <p className="muted" role="status">載入第 {page} 頁…</p> : null}
       {data.items.length ? (
-        <PosterGrid items={data.items} large busy={busy} />
+        <PosterGrid items={data.items} busy={busy} />
       ) : (
         <div>
           <div className="empty">{sourceLabel(sources, src)} 沒有找到「{q}」。</div>

@@ -14,6 +14,11 @@ import { Watch } from "./pages/Watch";
 import { api } from "./api";
 import { useSource } from "./source";
 
+/** Pages that are mostly cards: they use the full width and put their own scroll back on Back/Forward. */
+function isListPage(p: string) {
+  return /^\/(tv\/?)?$/.test(p) || /\/(search|favorites|history)$/.test(p) || p.includes("/c/");
+}
+
 function appRoutes(prefix: string) {
   const p = prefix;
   return (
@@ -39,6 +44,7 @@ export function App() {
   const { tv } = useSource();
   const navType = useNavigationType();
   const watch = loc.pathname.includes("/watch/");
+  const list = isListPage(loc.pathname);
   // A pairing link (?c=) holds the pages back until the cookie is set; otherwise their first
   // requests are refused and show "請先用配對碼連電視" (and /?c= never paired at all).
   // /connect has its own pairing page.
@@ -75,11 +81,13 @@ export function App() {
       }
     }
     // Back/Forward to a list page: the page puts its own position back once its items are shown.
-    const p = loc.pathname;
-    const listPage = /^\/(tv\/?)?$/.test(p) || /\/(search|favorites|history)$/.test(p) || p.includes("/c/");
-    if (navType === "POP" && listPage) return;
+    if (navType === "POP" && isListPage(loc.pathname)) return;
     window.scrollTo(0, 0);
   }, [loc.pathname, loc.search, loc.hash, navType]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("is-list", list);
+  }, [list]);
 
   if (!pairCode && paired === null) return <div className="app-shell"><main className="page"><p role="status">連線中…</p></main></div>;
   if (!pairCode && paired === false) return <PairPrompt />;
@@ -107,7 +115,7 @@ export function App() {
     <div className={`app-shell${tv ? " tv-mode" : ""}`}>
       {tv ? <TvKeys /> : null}
       <TopBar />
-      <main className={watch ? "page page-watch" : "page"}>
+      <main className={watch ? "page page-watch" : list ? "page page-wide" : "page"}>
         <Routes>
           <Route path="/connect" element={<PhonePair />} />
           {appRoutes("")}

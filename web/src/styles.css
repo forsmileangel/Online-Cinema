@@ -12,7 +12,19 @@
   --shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
   --radius: 14px;
   --bar: 64px;
+  /* Card size (Settings → 外觀): the narrowest a card gets before a grid adds a column. */
+  --card-min: 184px;
+  --card-min-p: 128px;
+  --card-gap: 14px;
+  --card-title: 13px;
   color-scheme: dark;
+}
+:root[data-card-size="s"] { --card-min: 150px; --card-min-p: 104px; --card-gap: 12px; --card-title: 12px; }
+:root[data-card-size="l"] { --card-min: 240px; --card-min-p: 160px; --card-gap: 16px; --card-title: 14px; }
+@media (max-width: 560px) {
+  /* Phones: two stills or three posters a row; smaller would hide the titles. */
+  :root, :root[data-card-size="s"] { --card-min: 150px; --card-min-p: 100px; --card-gap: 10px; }
+  :root[data-card-size="l"] { --card-min: 170px; --card-min-p: 120px; --card-gap: 10px; }
 }
 
 * { box-sizing: border-box; }
@@ -67,6 +79,9 @@ button { cursor: pointer; }
 .nav a.active, .nav a:hover, .ghost:hover { color: var(--text); background: var(--card); }
 
 .page { padding: 24px 28px 80px; max-width: 1400px; margin: 0 auto; }
+/* Card lists use the whole screen; the scrollbar's room is kept so the column count does not jump. */
+.page-wide { max-width: 2400px; }
+html.is-list { scrollbar-gutter: stable; }
 .h1 { font-size: 28px; margin: 8px 0 18px; font-weight: 700; }
 .picks { margin: 4px 0 32px; position: relative; z-index: 1; }
 .picks-group { margin-bottom: 14px; }
@@ -100,22 +115,12 @@ button { cursor: pointer; }
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--card-min)), 1fr));
+  gap: var(--card-gap);
 }
-.grid.large {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
-  gap: 22px;
-}
-.grid.large .title {
-  font-size: 16px;
-  -webkit-line-clamp: 5;
-  min-height: 7.2em;
-}
-.grid.large .poster .dur { font-size: 14px; }
 
 .card {
-  width: 230px; flex: 0 0 230px; scroll-snap-align: start;
+  width: var(--card-min); flex: 0 0 var(--card-min); scroll-snap-align: start;
   color: inherit; display: block;
 }
 .grid .card { width: auto; flex: none; }
@@ -156,7 +161,7 @@ button { cursor: pointer; }
 }
 .prog > span { display: block; height: 100%; background: var(--accent); }
 .card .title {
-  margin-top: 8px; font-size: 13px; line-height: 1.45;
+  margin-top: 8px; font-size: var(--card-title); line-height: 1.45;
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
   overflow: hidden; min-height: 5.6em;
 }
@@ -477,8 +482,6 @@ select.field, .field {
   .topbar .src-select .hide-sm { display: none; }
   .topbar .src-select select { min-width: 0; width: 100%; }
   .page { padding: 16px 14px 70px; }
-  .scroller .card { width: 170px; flex-basis: 170px; }
-  .grid.large { grid-template-columns: 1fr; }
   .nav .hide-sm { display: none; }
 }
 
@@ -522,7 +525,9 @@ select.field, .field {
   display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px;
 }
 .src-select select { min-width: 120px; }
-.tv-mode .card { width: 260px; flex-basis: 260px; }
+/* A TV is watched from across the room: big cards whatever the card-size setting says. */
+.tv-mode { --card-min: 420px; --card-min-p: 220px; --card-gap: 22px; --card-title: 16px; }
+.tv-mode .poster .dur { font-size: 14px; }
 .tv-mode .card:focus, .tv-mode .chip:focus, .tv-mode .more:focus, .tv-mode .nav a:focus, .tv-mode select:focus {
   outline: 3px solid var(--accent);
   outline-offset: 3px;
@@ -684,19 +689,13 @@ select.field, .field {
 .scroller { align-items: flex-start; }
 .grid { align-items: start; }
 .poster.portrait { aspect-ratio: 2 / 3; }
-.card.portrait { width: 150px; flex-basis: 150px; }
+.card.portrait { width: var(--card-min-p); flex-basis: var(--card-min-p); }
 .grid .card.portrait { width: auto; }
-.grid.portrait { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
-.grid.large.portrait { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.grid.portrait { grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--card-min-p)), 1fr)); }
 /* Titles take what they need; the full title is in the tooltip. */
 .card .title { -webkit-line-clamp: 3; min-height: 2.9em; }
 .card.portrait .title { -webkit-line-clamp: 2; }
-.grid.large .title { -webkit-line-clamp: 3; min-height: 2.9em; }
-@media (max-width: 720px) {
-  .scroller .card.portrait { width: 130px; flex-basis: 130px; }
-  .grid.portrait { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
-}
-.grid.mixed { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; }
+.grid.mixed { grid-template-columns: repeat(auto-fill, minmax(min(100%, calc((var(--card-min) + var(--card-min-p)) / 2)), 1fr)); }
 .watch > .ep-missing { margin: 0 0 10px; width: 100%; box-sizing: border-box; }
 
 .pair-prompt { max-width: 560px; margin: 0 auto; padding-top: 48px; }

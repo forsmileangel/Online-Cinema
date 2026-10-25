@@ -32,7 +32,7 @@ export function PosterRow({
       {note ? <p className="row-note">{note}</p> : null}
       <div className="scroller">
         {items.map((item) => (
-          <PosterCard key={`${item.source || ""}:${item.id}`} item={item} />
+          <PosterCard key={`${item.source || ""}:${item.id}`} item={item} showSource={false} />
         ))}
       </div>
     </section>

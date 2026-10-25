@@ -79,7 +79,7 @@ export function Browse() {
     return (
       <div>
         <h1 className="h1">{heading}</h1>
-        <SkeletonGrid large count={6} />
+        <SkeletonGrid />
       </div>
     );
   }
@@ -89,7 +89,7 @@ export function Browse() {
       <h1 className="h1">{heading}</h1>
       {data.notice ? <p className="muted" role="status">{data.notice}</p> : null}
       {busy ? <p className="muted" role="status">載入第 {page} 頁…</p> : null}
-      <PosterGrid items={data.items} large busy={busy} />
+      <PosterGrid items={data.items} busy={busy} />
       <Pager page={page} pages={data.pages} hasNext={data.has_next} onPage={setPage} />
     </div>
   );

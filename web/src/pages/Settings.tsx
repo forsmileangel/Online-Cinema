@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { CARD_SIZES, loadCardSize, saveCardSize, type CardSize } from "../cardSize";
 import type { Settings } from "../types";
 import { PhoneConnection } from "../components/PhoneConnection";
 import {
@@ -22,6 +23,7 @@ export function SettingsPage() {
   const [msg, setMsg] = useState("");
   const [savingLocation, setSavingLocation] = useState(false);
   const [theme, setTheme] = useState<SavedTheme>(() => loadSavedTheme());
+  const [cardSize, setCardSize] = useState<CardSize>(loadCardSize);
 
   useEffect(() => {
     api.settings().then(setS).catch((e: Error) => setMsg(e.message));
@@ -91,6 +93,21 @@ export function SettingsPage() {
       >
         恢復此模板
       </button>
+      <p className="muted" style={{ marginTop: 20 }}>卡片大小：首頁與列表的縮圖。只影響這台裝置，電視模式固定用大卡。</p>
+      <div className="chips" role="radiogroup" aria-label="卡片大小">
+        {CARD_SIZES.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            role="radio"
+            aria-checked={cardSize === option.id}
+            className={`chip${cardSize === option.id ? " on" : ""}`}
+            onClick={() => { setCardSize(option.id); saveCardSize(option.id); }}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
 
       <h2 className="h1" style={{ fontSize: 20, marginTop: 36 }}>投放到電視</h2>
       <p className="muted">

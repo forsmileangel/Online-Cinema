@@ -26,7 +26,13 @@ function retriedCoverUrl(cover: string, token: string) {
   }
 }
 
-export function PosterCard({ item, onRemove, removeLabel = "移除" }: { item: Card; onRemove?: () => void; removeLabel?: string }) {
+export function PosterCard({ item, onRemove, removeLabel = "移除", showSource = true }: {
+  item: Card;
+  onRemove?: () => void;
+  removeLabel?: string;
+  /** Lists from one source leave the source name out. */
+  showSource?: boolean;
+}) {
   const { prefix, zhMap } = useSource();
   const loc = useLocation();
   const pct = item.progress && item.progress > 0.02 ? Math.round(item.progress * 100) : 0;
@@ -118,7 +124,7 @@ export function PosterCard({ item, onRemove, removeLabel = "移除" }: { item: C
       <Link className="card-title-link" data-tv="1" to={href} onClick={opened}>
         <div className="title" title={label}>{label}</div>
       </Link>
-      {item.source ? <div className="badge-src">{SRC_BADGE[item.source] || item.source}</div> : null}
+      {showSource && item.source ? <div className="badge-src">{SRC_BADGE[item.source] || item.source}</div> : null}
     </div>
   );
 }

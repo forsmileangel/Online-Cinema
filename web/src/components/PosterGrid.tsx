@@ -1,3 +1,4 @@
+import { columnsFor, useGridMetrics } from "../hooks/useGridMetrics";
 import { isPortrait } from "../source";
 import type { Card } from "../types";
 import { PosterCard } from "./PosterCard";
@@ -41,10 +42,10 @@ export function PosterGrid({
   );
 }
 
-function SkeletonCard() {
+function SkeletonCard({ portrait = false }: { portrait?: boolean }) {
   return (
-    <div className="card skeleton">
-      <div className="poster" />
+    <div className={`card skeleton${portrait ? " portrait" : ""}`}>
+      <div className={`poster${portrait ? " portrait" : ""}`} />
       <span className="skeleton-line" />
       <span className="skeleton-line short" />
     </div>
@@ -59,7 +60,11 @@ export function SkeletonGrid({ count = 12 }: { count?: number }) {
   );
 }
 
-export function SkeletonRows({ rows = 2 }: { rows?: number }) {
+/** Placeholder home rows: two lines of cards in the shape the source uses. */
+export function SkeletonRows({ rows = 2, portrait = false }: { rows?: number; portrait?: boolean }) {
+  const metrics = useGridMetrics();
+  const shape = portrait ? " portrait" : "";
+  const cols = metrics ? columnsFor(metrics, shape) : null;
   return (
     <div aria-hidden>
       {Array.from({ length: rows }, (_, row) => (
@@ -67,8 +72,8 @@ export function SkeletonRows({ rows = 2 }: { rows?: number }) {
           <div className="row-head">
             <span className="skeleton-line" />
           </div>
-          <div className="scroller">
-            {Array.from({ length: 6 }, (_, i) => <SkeletonCard key={i} />)}
+          <div className={`grid${shape}`} style={cols ? { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` } : undefined}>
+            {Array.from({ length: (cols ?? 8) * 2 }, (_, i) => <SkeletonCard key={i} portrait={portrait} />)}
           </div>
         </section>
       ))}

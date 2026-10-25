@@ -81,7 +81,8 @@ export function MultiSearch({ q, src, scope }: { q: string; src: string; scope: 
             to={searchPath("", q, s.id)}
             moreLabel="看全部"
             note={listing.notice}
-            items={listing.items.slice(0, 12)}
+            items={listing.items}
+            lines={2}
           />
         );
       })}

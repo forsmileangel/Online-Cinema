@@ -83,10 +83,15 @@ button { cursor: pointer; }
 .page-wide { max-width: 2400px; }
 html.is-list { scrollbar-gutter: stable; }
 .h1 { font-size: 28px; margin: 8px 0 18px; font-weight: 700; }
-.picks { margin: 4px 0 32px; position: relative; z-index: 1; }
+.picks { margin: 4px 0 32px; position: relative; z-index: 1; scroll-margin-top: calc(var(--bar) + 8px); }
+.picks.folded { margin-bottom: 20px; }
+.picks-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.picks-bar h2 { margin: 0 6px 0 0; font-size: 18px; }
+.picks.folded .chips { margin: 0; }
+.chip.all { color: var(--text); }
 .picks-group { margin-bottom: 14px; }
 .picks-title { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
-.home-row { overflow: hidden; margin-bottom: 28px; }
+.home-row { margin-bottom: 28px; }
 .muted { color: var(--muted); }
 .phone-connection { margin-top: 24px; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
 .phone-connection .row-head { align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -103,27 +108,13 @@ html.is-list { scrollbar-gutter: stable; }
 .row-head h2 { margin: 0; font-size: 20px; }
 .more { color: var(--accent-2); font-size: 14px; }
 
-.scroller {
-  display: flex; gap: 14px; overflow-x: auto; overflow-y: hidden;
-  padding: 10px 4px 14px;
-  scroll-snap-type: x mandatory;
-  min-width: 0;
-  max-width: 100%;
-}
-.scroller::-webkit-scrollbar { height: 8px; }
-.scroller::-webkit-scrollbar-thumb { background: #333; border-radius: 8px; }
-
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--card-min)), 1fr));
   gap: var(--card-gap);
 }
 
-.card {
-  width: var(--card-min); flex: 0 0 var(--card-min); scroll-snap-align: start;
-  color: inherit; display: block;
-}
-.grid .card { width: auto; flex: none; }
+.card { color: inherit; display: block; min-width: 0; }
 .poster-shell { position: relative; }
 .poster-link, .card-title-link { display: block; color: inherit; }
 .poster {
@@ -686,11 +677,8 @@ select.field, .field {
 }
 
 /* Card shape follows the source: posters stand 2:3, stills stay 16:9. */
-.scroller { align-items: flex-start; }
 .grid { align-items: start; }
 .poster.portrait { aspect-ratio: 2 / 3; }
-.card.portrait { width: var(--card-min-p); flex-basis: var(--card-min-p); }
-.grid .card.portrait { width: auto; }
 .grid.portrait { grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--card-min-p)), 1fr)); }
 /* Titles take what they need; the full title is in the tooltip. */
 .card .title { -webkit-line-clamp: 3; min-height: 2.9em; }

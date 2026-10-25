@@ -12,6 +12,7 @@ import { SettingsPage } from "./pages/Settings";
 import { OfflineLibrary } from "./components/Offline";
 import { Watch } from "./pages/Watch";
 import { api } from "./api";
+import { GridMetricsContext, measureKey, useMeasureGrid } from "./hooks/useGridMetrics";
 import { useSource } from "./source";
 
 /** Pages that are mostly cards: they use the full width and put their own scroll back on Back/Forward. */
@@ -45,6 +46,8 @@ export function App() {
   const navType = useNavigationType();
   const watch = loc.pathname.includes("/watch/");
   const list = isListPage(loc.pathname);
+  const [mainEl, setMainEl] = useState<HTMLElement | null>(null);
+  const metrics = useMeasureGrid(mainEl, measureKey(loc.pathname, tv));
   // A pairing link (?c=) holds the pages back until the cookie is set; otherwise their first
   // requests are refused and show "請先用配對碼連電視" (and /?c= never paired at all).
   // /connect has its own pairing page.
@@ -115,13 +118,15 @@ export function App() {
     <div className={`app-shell${tv ? " tv-mode" : ""}`}>
       {tv ? <TvKeys /> : null}
       <TopBar />
-      <main className={watch ? "page page-watch" : list ? "page page-wide" : "page"}>
-        <Routes>
-          <Route path="/connect" element={<PhonePair />} />
-          {appRoutes("")}
-          {appRoutes("/tv")}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+      <main ref={setMainEl} className={watch ? "page page-watch" : list ? "page page-wide" : "page"}>
+        <GridMetricsContext.Provider value={metrics}>
+          <Routes>
+            <Route path="/connect" element={<PhonePair />} />
+            {appRoutes("")}
+            {appRoutes("/tv")}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </GridMetricsContext.Provider>
       </main>
     </div>
   );

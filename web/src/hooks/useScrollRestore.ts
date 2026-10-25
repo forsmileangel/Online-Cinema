@@ -10,6 +10,13 @@ if ("scrollRestoration" in window.history) window.history.scrollRestoration = "m
 
 export function rememberOpened(key: string, href: string) {
   opened.set(key, href);
+  // Taken now: scrolling while the next page lays out must not count for this one.
+  positions.set(key, window.scrollY);
+}
+
+/** Whether the browser still shows this history entry (the router keeps its key in history.state). */
+function isCurrent(key: string) {
+  return (window.history.state?.key ?? "default") === key;
 }
 
 /** Saves this page's scroll position and puts it back when the page is reached again with Back/Forward. */
@@ -22,7 +29,8 @@ export function useScrollRestore(ready: boolean) {
     let frame = 0;
     const save = () => {
       cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => positions.set(key, window.scrollY));
+      // The listener outlives the route change by a moment; by then the scroll belongs to the next page.
+      frame = requestAnimationFrame(() => { if (isCurrent(key)) positions.set(key, window.scrollY); });
     };
     window.addEventListener("scroll", save, { passive: true });
     return () => {

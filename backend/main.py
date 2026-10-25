@@ -19,7 +19,7 @@ from . import cast_devices as known_devices
 from . import db
 from . import lan
 from . import tv_session
-from . import alternatives, display, next_buffer, offline, terms
+from . import alternatives, display, home_fill, next_buffer, offline, terms
 from . import hls_proxy
 from . import http_client
 from . import settings as S
@@ -33,7 +33,6 @@ from .models import (
     OfflineCleanupIn,
     HistoryIn,
     HomePayload,
-    HomeRow,
     SettingsIn,
     SettingsOut,
     TranslateIn,
@@ -248,7 +247,7 @@ def home(source: str | None = None):
             )
         return display.home(src, HomePayload(
             continue_watching=cont[:20],
-            rows=[HomeRow(kind=k, title=t, items=items) for k, t, items in rows_raw],
+            rows=home_fill.fill(src, site, home_fill.rows(site, rows_raw), picks or []),
             mirror="",
             source=src,
             picks=picks or [],

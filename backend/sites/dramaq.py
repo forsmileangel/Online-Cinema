@@ -154,6 +154,10 @@ def parse_home_sections(html: str) -> list[tuple[str, str, list[Card]]]:
     return rows
 
 
+# 全部 (the whole catalogue) says little as a home row and is the slowest list to fetch.
+HOME_FILL_SKIP = ("all",)
+
+
 def home_bundle() -> tuple[list[tuple[str, str, list[Card]]], list[PickGroup]]:
     rows = parse_home_sections(_get("/"))
     picks = [

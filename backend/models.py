@@ -35,6 +35,9 @@ class HomeRow(BaseModel):
     kind: str
     title: str
     items: list[Card]
+    slug: str = ""
+    # False when the source has no list behind the row (更多 would show the same cards or nothing).
+    more: bool = True
 
 
 class PickChip(BaseModel):

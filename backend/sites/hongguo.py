@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote, urlparse
 
@@ -339,13 +341,18 @@ def _get_json(path: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def search(query: str, page: int = 1) -> Listing:
-    q = safe_search_query(query)
-    page = max(1, min(int(page), 50))
-    simplified = zh.to_simplified(q)
-    data = _get_json(f"/index.php/ajax/suggest?mid=1&wd={quote(simplified)}&limit=50&page={page}")
-    if simplified != q and (data.get("total") in (0, "0") or not data.get("list")):
-        data = _get_json(f"/index.php/ajax/suggest?mid=1&wd={quote(q)}&limit=50&page={page}")
+SEARCH_PAGE = 48
+# The suggest API ignores page= and always answers with its first `limit` results, so one
+# request with a large limit is cut into pages here (and the site's search pages sit
+# behind a Cloudflare challenge).
+SEARCH_LIMIT = 1000
+SEARCH_TTL = 600
+_search_lock = threading.Lock()
+_search_kept: dict[str, tuple[float, list[Card]]] = {}
+
+
+def _suggest(wd: str) -> list[Card]:
+    data = _get_json(f"/index.php/ajax/suggest?mid=1&wd={quote(wd)}&limit={SEARCH_LIMIT}")
     docs = data.get("list") if isinstance(data, dict) else None
     items: list[Card] = []
     seen: set[str] = set()
@@ -362,12 +369,36 @@ def search(query: str, page: int = 1) -> Listing:
         seen.add(vid)
         title = str(d.get("name") or vid)[:500]
         items.append(Card(id=vid, title=title, cover=_cover(str(d.get("pic") or "")), source="hongguo"))
-        if len(items) >= 50:
-            break
-    total = int(data.get("total") or 0) if isinstance(data, dict) else 0
-    pagecount = int(data.get("pagecount") or 0) if isinstance(data, dict) else 0
-    pages = pagecount if pagecount > 1 else (min(50, max(1, (total + 49) // 50)) if total > 50 else None)
-    return Listing(items=items, page=page, has_next=(pages or 1) > page, title=q, pages=pages)
+    return items
+
+
+def _search_all(q: str) -> list[Card]:
+    now = time.monotonic()
+    with _search_lock:
+        kept = _search_kept.get(q)
+        if kept and kept[0] > now:
+            return kept[1]
+    simplified = zh.to_simplified(q)
+    items = _suggest(simplified)
+    if not items and simplified != q:
+        items = _suggest(q)
+    if items:
+        with _search_lock:
+            for key in [key for key, (until, _) in _search_kept.items() if until <= now]:
+                del _search_kept[key]
+            while len(_search_kept) >= 50:
+                del _search_kept[next(iter(_search_kept))]
+            _search_kept[q] = (now + SEARCH_TTL, items)
+    return items
+
+
+def search(query: str, page: int = 1) -> Listing:
+    q = safe_search_query(query)
+    found = _search_all(q)
+    pages = max(1, (len(found) + SEARCH_PAGE - 1) // SEARCH_PAGE)
+    page = max(1, int(page))
+    items = found[(page - 1) * SEARCH_PAGE:page * SEARCH_PAGE]
+    return Listing(items=items, page=page, has_next=page < pages, title=q, pages=pages if pages > 1 else None)
 
 
 def _detail_episodes(html: str, video_id: str) -> list[str]:

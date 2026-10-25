@@ -13,6 +13,10 @@ def load(name: str) -> str:
 
 
 class HongguoTests(unittest.TestCase):
+    def setUp(self):
+        hongguo._search_kept.clear()
+        self.addCleanup(hongguo._search_kept.clear)
+
     def test_source_is_registered(self):
         ids = {s["id"] for s in available()}
         self.assertIn("hongguo", ids)
@@ -90,14 +94,36 @@ class HongguoTests(unittest.TestCase):
 
     def test_search_simplifies_query_and_preserves_original_title(self):
         from urllib.parse import quote
-        with patch.object(hongguo, "_get_json", return_value={"total": 100, "list": [{"id": 1, "name": "Neutral"}]}) as get:
-            result = hongguo.search("總裁", page=2)
-        get.assert_called_once_with(f"/index.php/ajax/suggest?mid=1&wd={quote('总裁')}&limit=50&page=2")
+        with patch.object(hongguo, "_get_json", return_value={"total": 1, "list": [{"id": 1, "name": "Neutral"}]}) as get:
+            result = hongguo.search("總裁")
+        get.assert_called_once_with(f"/index.php/ajax/suggest?mid=1&wd={quote('总裁')}&limit=1000")
         self.assertEqual(result.title, "總裁")
+
+    def test_search_pages_are_cut_from_one_answer(self):
+        # The site answers every page= with the same first results, so pages are made here.
+        payload = {"total": 100, "list": [{"id": i, "name": f"Neutral {i}"} for i in range(1, 101)]}
+        with patch.object(hongguo, "_get_json", return_value=payload) as get:
+            first = hongguo.search("總裁")
+            second = hongguo.search("總裁", page=2)
+            last = hongguo.search("總裁", page=3)
+            past = hongguo.search("總裁", page=4)
+        get.assert_called_once()
+        self.assertEqual([c.id for c in first.items], [str(i) for i in range(1, 49)])
+        self.assertEqual([c.id for c in second.items], [str(i) for i in range(49, 97)])
+        self.assertEqual([c.id for c in last.items], ["97", "98", "99", "100"])
+        self.assertEqual([(r.pages, r.has_next) for r in (first, second, last)], [(3, True), (3, True), (3, False)])
+        self.assertEqual((past.items, past.has_next), ([], False))
+
+    def test_empty_search_is_asked_again_next_time(self):
+        with patch.object(hongguo, "_get_json", return_value={"total": 0, "list": []}) as get:
+            hongguo.search("ABC-123")
+            hongguo.search("ABC-123")
+        self.assertEqual(get.call_count, 2)
 
     def test_empty_simplified_search_retries_original(self):
         from urllib.parse import parse_qs, urlparse
         for empty in ({"total": 0, "list": []}, {"total": 10, "list": []}):
+            hongguo._search_kept.clear()
             with patch.object(hongguo, "_get_json", side_effect=[empty, {"total": 1, "list": [{"id": 1}]}]) as get:
                 self.assertEqual(len(hongguo.search("總裁").items), 1)
             self.assertEqual([parse_qs(urlparse(c.args[0]).query)["wd"][0] for c in get.call_args_list], ["总裁", "總裁"])

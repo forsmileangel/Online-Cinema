@@ -26,7 +26,8 @@ export type PickGroup = { title: string; items: PickChip[] };
 
 export type HomePayload = {
   continue_watching: Card[];
-  rows: { kind: string; title: string; items: Card[] }[];
+  /** more: false when the source has nothing behind the row's 更多. */
+  rows: { kind: string; slug?: string; title: string; items: Card[]; more?: boolean }[];
   mirror: string;
   error?: string | null;
   picks?: PickGroup[];

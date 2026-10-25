@@ -200,6 +200,10 @@ def _slice(items: list[Card], page: int, title: str) -> Listing:
     )
 
 
+# 全部 (the whole catalogue) says little as a home row and is the slowest list to fetch.
+HOME_FILL_SKIP = ("all",)
+
+
 def home_bundle() -> tuple[list[tuple[str, str, list[Card]]], list[PickGroup]]:
     rows = parse_home_sections(_get("/"))
     picks = [

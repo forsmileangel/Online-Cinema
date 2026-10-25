@@ -125,9 +125,9 @@ export function Home() {
       <PosterRow title="繼續觀看" to={`/history?only=${encodeURIComponent(source)}`} items={data.continue_watching} lines={1} />
       {data.rows.map((row) => (
         <PosterRow
-          key={row.kind}
+          key={`${row.kind}/${row.slug || ""}`}
           title={row.title}
-          to={withSrc(`/c/${row.kind}`, source)}
+          to={row.more === false ? undefined : withSrc(row.slug ? `/c/${row.kind}/${encodeURIComponent(row.slug)}` : `/c/${row.kind}`, source)}
           items={row.items}
           lines={2}
         />

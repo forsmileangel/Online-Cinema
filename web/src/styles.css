@@ -285,6 +285,7 @@ button.chip { font: inherit; }
 .chip.on {
   background: var(--accent); color: #fff; border-color: transparent;
 }
+.sort-bar { margin: -4px 0 14px; }
 .ep-label { font-size: 13px; color: var(--muted); margin: 0 8px 8px; }
 .ep-auto {
   display: block;

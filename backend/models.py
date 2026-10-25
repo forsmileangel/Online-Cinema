@@ -22,6 +22,14 @@ class Tag(BaseModel):
     kind: str
 
 
+class SortOption(BaseModel):
+    id: str
+    label: str
+    # Set when the option is another list of the source (/c/kind/slug) rather than ?sort=id.
+    kind: str = ""
+    slug: str = ""
+
+
 class Listing(BaseModel):
     notice: str | None = None
     items: list[Card]
@@ -29,6 +37,9 @@ class Listing(BaseModel):
     has_next: bool
     title: str = ""
     pages: int | None = None
+    sorts: list[SortOption] = Field(default_factory=list)
+    # The option in effect: an id from sorts.
+    sort: str = ""
 
 
 class HomeRow(BaseModel):

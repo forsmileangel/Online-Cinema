@@ -114,6 +114,21 @@ class HongguoTests(unittest.TestCase):
         self.assertEqual([(r.pages, r.has_next) for r in (first, second, last)], [(3, True), (3, True), (3, False)])
         self.assertEqual((past.items, past.has_next), ([], False))
 
+    def test_list_orders_follow_the_sites_own_links(self):
+        with patch.object(hongguo, "_get", return_value="") as get:
+            hongguo.browse("all", sort="hits")
+            hongguo.browse("gudian", page=2, sort="score")
+            hongguo.browse("class", slug="甜宠", page=3, sort="time")
+            hongguo.browse("all", page=2, sort="nonsense")
+        self.assertEqual([c.args[0] for c in get.call_args_list], [
+            "/vodshow/51--hits---------.html",
+            "/vodshow/51--score-%E5%8F%A4%E8%A3%85-----2---.html",
+            "/vodshow/51--time-%E7%94%9C%E5%AE%A0-----3---.html",
+            "/vodshow/51--------2---.html",
+        ])
+        self.assertEqual([o.id for o in hongguo.sorts("all")], ["time", "hits", "score"])
+        self.assertEqual(hongguo.sorts("featured"), [])
+
     def test_empty_search_is_asked_again_next_time(self):
         with patch.object(hongguo, "_get_json", return_value={"total": 0, "list": []}) as get:
             hongguo.search("ABC-123")

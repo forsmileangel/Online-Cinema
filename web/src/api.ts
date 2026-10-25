@@ -108,8 +108,11 @@ async function list<T>(path: string, signal?: AbortSignal, timeoutMs?: number): 
 
 const slowList = (source?: string) => (source === "chinaq" || source === "dramaq" ? 35000 : undefined);
 const homePath = (source?: string) => withSource("/api/home", source);
-const browsePath = (kind: string, slug: string | undefined, page: number, source?: string) =>
-  withSource(`/api/browse/${encodeURIComponent(kind)}${slug ? `/${encodeURIComponent(slug)}` : ""}?page=${page}`, source);
+const browsePath = (kind: string, slug: string | undefined, page: number, source?: string, sort?: string) =>
+  withSource(
+    `/api/browse/${encodeURIComponent(kind)}${slug ? `/${encodeURIComponent(slug)}` : ""}?page=${page}${sort ? `&sort=${encodeURIComponent(sort)}` : ""}`,
+    source,
+  );
 const searchPath = (q: string, page: number, source?: string) =>
   withSource(`/api/search?q=${encodeURIComponent(q)}&page=${page}`, source);
 
@@ -149,10 +152,10 @@ export const api = {
   home: (source?: string, signal?: AbortSignal) =>
     list<HomePayload>(homePath(source), signal, 35000),
   peekHome: (source?: string) => peek<HomePayload>(homePath(source)),
-  browse: (kind: string, slug?: string, page = 1, source?: string, signal?: AbortSignal) =>
-    list<Listing>(browsePath(kind, slug, page, source), signal, slowList(source)),
-  peekBrowse: (kind: string, slug?: string, page = 1, source?: string, back = false) =>
-    peek<Listing>(browsePath(kind, slug, page, source), back ? BACK_TTL : LIST_TTL),
+  browse: (kind: string, slug?: string, page = 1, source?: string, signal?: AbortSignal, sort?: string) =>
+    list<Listing>(browsePath(kind, slug, page, source, sort), signal, slowList(source)),
+  peekBrowse: (kind: string, slug?: string, page = 1, source?: string, back = false, sort?: string) =>
+    peek<Listing>(browsePath(kind, slug, page, source, sort), back ? BACK_TTL : LIST_TTL),
   search: (q: string, page = 1, source?: string, signal?: AbortSignal) =>
     list<Listing>(searchPath(q, page, source), signal, slowList(source)),
   peekSearch: (q: string, page = 1, source?: string, back = false) =>

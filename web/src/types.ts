@@ -19,7 +19,13 @@ export type Listing = {
   has_next: boolean;
   title: string;
   pages?: number | null;
+  sorts?: SortOption[];
+  /** The option in effect (an id from sorts). */
+  sort?: string;
 };
+
+/** kind set: another list of the source (/c/kind/slug); otherwise ?sort=id on this list. */
+export type SortOption = { id: string; label: string; kind?: string; slug?: string };
 
 export type PickChip = { name: string; kind: string; slug: string };
 export type PickGroup = { title: string; items: PickChip[] };

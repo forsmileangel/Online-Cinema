@@ -104,6 +104,16 @@ def safe_slug(raw: str) -> str:
     return s
 
 
+SORT_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,23}")
+
+
+def safe_sort(raw: str | None) -> str:
+    s = (raw or "").strip().lower()
+    if s and not SORT_RE.fullmatch(s):
+        raise UnsafeURL("invalid sort")
+    return s
+
+
 def safe_kind(raw: str) -> str:
     k = (raw or "").strip().lower()
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", k):

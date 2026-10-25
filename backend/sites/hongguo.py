@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 
 from .. import http_client, zh
 from ..hls_proxy import proxied_media
-from ..models import Card, Episode, Listing, PickChip, PickGroup, Tag, VideoDetail
+from ..models import Card, Episode, Listing, PickChip, PickGroup, SortOption, Tag, VideoDetail
 from ..security import (
     SiteBusy,
     UnsafeURL,
@@ -211,16 +211,25 @@ def _safe_ep(raw: str | None) -> str | None:
     return s
 
 
-def _show_path(kind: str, page: int) -> str:
+# The list pages' own 按最新 / 按最热 / 按评分 links (Apple CMS by=).
+ORDERS = {"time": "最新", "hits": "最熱", "score": "評分"}
+
+
+def _vodshow(cls: str, page: int, by: str = "") -> str:
+    # Apple CMS: /vodshow/{type}-{area}-{by}-{class}-{lang}-{letter}-{actor}-{director}-{page}-...
     page = max(1, min(int(page), 1000))
-    if kind in CLASSES:
-        cls = quote(CLASSES[kind][0])
-        if page <= 1:
-            return f"/vodshow/{TYPE_ID}---{cls}--------.html"
-        return f"/vodshow/{TYPE_ID}---{cls}-----{page}---.html"
-    if page <= 1:
-        return f"/vodshow/{TYPE_ID}-----------.html"
-    return f"/vodshow/{TYPE_ID}--------{page}---.html"
+    fields = [TYPE_ID, "", by, quote(cls), "", "", "", "", str(page) if page > 1 else "", "", "", ""]
+    return f"/vodshow/{'-'.join(fields)}.html"
+
+
+def _show_path(kind: str, page: int, by: str = "") -> str:
+    return _vodshow(CLASSES[kind][0] if kind in CLASSES else "", page, by)
+
+
+def sorts(kind: str, slug: str | None = None) -> list[SortOption]:
+    if kind == "featured":
+        return []
+    return [SortOption(id=key, label=label) for key, label in ORDERS.items()]
 
 
 def home_bundle() -> tuple[list[tuple[str, str, list[Card]]], list[PickGroup]]:
@@ -285,9 +294,10 @@ def _listing_from(html: str, page: int, title: str) -> Listing:
     )
 
 
-def browse(kind: str, slug: str | None = None, page: int = 1) -> Listing:
+def browse(kind: str, slug: str | None = None, page: int = 1, sort: str = "") -> Listing:
     page = max(1, min(int(page), 1000))
     kind = (kind or "").strip().lower()
+    by = sort if sort in ORDERS else ""
     title = "全部短劇"
     path_kind = "all"
     if kind in ("featured", "hot"):
@@ -306,15 +316,10 @@ def browse(kind: str, slug: str | None = None, page: int = 1) -> Listing:
             path_kind = match
             title = CLASSES[match][1]
         else:
-            html = _get(
-                f"/vodshow/{TYPE_ID}---{quote(slug)}--------.html"
-                if page <= 1
-                else f"/vodshow/{TYPE_ID}---{quote(slug)}-----{page}---.html"
-            )
-            return _listing_from(html, page, slug)
+            return _listing_from(_get(_vodshow(slug, page, by)), page, slug)
     else:
         raise UnsafeURL("unknown category")
-    html = _get(_show_path(path_kind, page))
+    html = _get(_show_path(path_kind, page, by))
     return _listing_from(html, page, title)
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import parse_qs, unquote, urlparse
 
 from fastapi import FastAPI, HTTPException, Query
@@ -19,7 +20,7 @@ from . import cast_devices as known_devices
 from . import db
 from . import lan
 from . import tv_session
-from . import alternatives, display, home_fill, next_buffer, offline, terms
+from . import alternatives, display, home_fill, next_buffer, offline, sorting, terms
 from . import hls_proxy
 from . import http_client
 from . import settings as S
@@ -258,19 +259,30 @@ def home(source: str | None = None):
 
 
 @app.get("/api/browse/{kind}")
-def browse(kind: str, page: int = Query(1, ge=1, le=1000), source: str | None = None):
+def browse(
+    kind: str,
+    page: int = Query(1, ge=1, le=1000),
+    source: str | None = None,
+    sort: Annotated[str, Query(max_length=24)] = "",
+):
     src = _src(source)
     try:
-        return display.listing(src, sites.get(src).browse(kind, page=page))
+        return display.listing(src, sorting.browse(sites.get(src), kind, None, page, sort))
     except Exception as e:
         raise _err(e) from e
 
 
 @app.get("/api/browse/{kind}/{slug}")
-def browse_slug(kind: str, slug: str, page: int = Query(1, ge=1, le=1000), source: str | None = None):
+def browse_slug(
+    kind: str,
+    slug: str,
+    page: int = Query(1, ge=1, le=1000),
+    source: str | None = None,
+    sort: Annotated[str, Query(max_length=24)] = "",
+):
     src = _src(source)
     try:
-        return display.listing(src, sites.get(src).browse(kind, slug=slug, page=page))
+        return display.listing(src, sorting.browse(sites.get(src), kind, slug, page, sort))
     except Exception as e:
         raise _err(e) from e
 

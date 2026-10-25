@@ -61,13 +61,13 @@ export function Library({ tab }: { tab: Tab }) {
   const shown = (entries || []).filter((e) => (!only || e.card.source === only) && (!needle || e.card.title.toLowerCase().includes(needle)));
   const removeWord = tab === "favorites" ? "取消收藏" : "移除紀錄";
 
-  function setView(changes: Record<string, string>) {
+  function setView(changes: Record<string, string>, keepScroll = false) {
     const next = new URLSearchParams(params);
     for (const [name, value] of Object.entries(changes)) {
       if (value) next.set(name, value);
       else next.delete(name);
     }
-    setParams(next, { replace: true });
+    setParams(next, { replace: true, state: keepScroll ? { keepScroll: true } : undefined });
   }
 
   async function remove(card: Card) {
@@ -154,7 +154,7 @@ export function Library({ tab }: { tab: Tab }) {
       ) : null}
       {shown.length > shownCount ? (
         <div className="pager">
-          <button className="btn alt" type="button" data-tv="1" onClick={() => setView({ n: String(shownCount + STEP) })}>
+          <button className="btn alt" type="button" data-tv="1" onClick={() => setView({ n: String(shownCount + STEP) }, true)}>
             顯示更多（還有 {shown.length - shownCount} 部）
           </button>
         </div>

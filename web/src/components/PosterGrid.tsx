@@ -52,10 +52,10 @@ function SkeletonCard({ portrait = false }: { portrait?: boolean }) {
   );
 }
 
-export function SkeletonGrid({ count = 12 }: { count?: number }) {
+export function SkeletonGrid({ count = 12, portrait = false }: { count?: number; portrait?: boolean }) {
   return (
-    <div className="grid" aria-hidden>
-      {Array.from({ length: count }, (_, i) => <SkeletonCard key={i} />)}
+    <div className={`grid${portrait ? " portrait" : ""}`} aria-hidden>
+      {Array.from({ length: count }, (_, i) => <SkeletonCard key={i} portrait={portrait} />)}
     </div>
   );
 }

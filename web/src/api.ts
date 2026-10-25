@@ -82,20 +82,22 @@ function withSource(path: string, source?: string) {
 
 // Listings change slowly; keeping recent ones lets Back show the page at once.
 const LIST_TTL = 10 * 60 * 1000;
+// Back to a list that grew page by page brings back what was shown, even if it is older.
+const BACK_TTL = 60 * 60 * 1000;
 const kept = new Map<string, { at: number; data: unknown }>();
 
 function keep(key: string, data: unknown) {
   kept.delete(key);
   kept.set(key, { at: Date.now(), data });
   for (const old of kept.keys()) {
-    if (kept.size <= 60) break;
+    if (kept.size <= 200) break;
     kept.delete(old);
   }
 }
 
-function peek<T>(key: string): T | undefined {
+function peek<T>(key: string, maxAge = LIST_TTL): T | undefined {
   const hit = kept.get(key);
-  return hit && Date.now() - hit.at < LIST_TTL ? (hit.data as T) : undefined;
+  return hit && Date.now() - hit.at < maxAge ? (hit.data as T) : undefined;
 }
 
 async function list<T>(path: string, signal?: AbortSignal, timeoutMs?: number): Promise<T> {
@@ -149,10 +151,12 @@ export const api = {
   peekHome: (source?: string) => peek<HomePayload>(homePath(source)),
   browse: (kind: string, slug?: string, page = 1, source?: string, signal?: AbortSignal) =>
     list<Listing>(browsePath(kind, slug, page, source), signal, slowList(source)),
-  peekBrowse: (kind: string, slug?: string, page = 1, source?: string) => peek<Listing>(browsePath(kind, slug, page, source)),
+  peekBrowse: (kind: string, slug?: string, page = 1, source?: string, back = false) =>
+    peek<Listing>(browsePath(kind, slug, page, source), back ? BACK_TTL : LIST_TTL),
   search: (q: string, page = 1, source?: string, signal?: AbortSignal) =>
     list<Listing>(searchPath(q, page, source), signal, slowList(source)),
-  peekSearch: (q: string, page = 1, source?: string) => peek<Listing>(searchPath(q, page, source)),
+  peekSearch: (q: string, page = 1, source?: string, back = false) =>
+    peek<Listing>(searchPath(q, page, source), back ? BACK_TTL : LIST_TTL),
   searchMulti,
   peekMulti: (key: string) => peek<Record<string, MultiResult>>(`multi\n${key}`),
   keepMulti: (key: string, results: Record<string, MultiResult>) => keep(`multi\n${key}`, results),

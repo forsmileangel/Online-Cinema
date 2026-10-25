@@ -85,7 +85,11 @@ export function App() {
     }
     // Back/Forward to a list page: the page puts its own position back once its items are shown.
     if (navType === "POP" && isListPage(loc.pathname)) return;
+    // A list that only records how far it has grown (?to=, ?n=) stays where the reader is.
+    if ((loc.state as { keepScroll?: boolean } | null)?.keepScroll) return;
     window.scrollTo(0, 0);
+    // loc.state comes with loc.search: the same navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loc.pathname, loc.search, loc.hash, navType]);
 
   useEffect(() => {

@@ -454,6 +454,12 @@ button.chip { font: inherit; }
 .err, .empty { padding: 40px 8px; color: var(--muted); }
 .pager { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; align-items: center; }
 .pager .gap { color: var(--muted); padding: 0 2px; }
+.page-range { margin-left: 12px; font-size: 14px; font-weight: 400; color: var(--muted); }
+.page-range.line { display: block; margin: -8px 0 12px; }
+/* The end of a list that grows as it is scrolled. */
+.list-more { margin-top: 18px; }
+.list-more .err { padding: 16px 8px; }
+.list-more > .grid { margin-top: 10px; }
 .status { font-size: 13px; color: var(--muted); }
 
 select.field, .field {

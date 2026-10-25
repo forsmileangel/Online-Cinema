@@ -128,5 +128,21 @@ class GimyTests(unittest.TestCase):
             assert_hls_url("https://evil.com/a.m3u8")
 
 
+class GimySortTests(unittest.TestCase):
+    def test_orders_open_the_explore_pages_and_default_stays_the_genre_page(self):
+        with patch.object(gimy, "_get", return_value="") as get:
+            gimy.browse("kr", sort="hits")
+            gimy.browse("kr", page=3, sort="time_add")
+            gimy.browse("kr", page=2, sort="default")
+            gimy.browse("update", page=2)
+        self.assertEqual([c.args[0] for c in get.call_args_list], [
+            "/explore/20--hits---------.html", "/explore/20--time_add------3---.html",
+            "/genre/20-2.html", "/explore/2--time------2---.html",
+        ])
+        self.assertEqual([o.id for o in gimy.sorts("kr")], ["default", "time", "time_add", "hits", "hits_week"])
+        self.assertEqual(gimy.sorts("top"), [])
+        self.assertEqual(gimy.sorts("update"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

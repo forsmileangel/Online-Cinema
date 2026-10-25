@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 
 from .. import http_client
 from ..hls_proxy import dlna_media_url, proxied_media
-from ..models import Card, Episode, Listing, PickChip, PickGroup, Tag, VideoDetail
+from ..models import Card, Episode, Listing, PickChip, PickGroup, SortOption, Tag, VideoDetail
 from ..security import (
     SiteBusy,
     SourceUnavailable,
@@ -230,7 +230,21 @@ def home_rows() -> list[tuple[str, str, list[Card]]]:
     return home_bundle()[0]
 
 
-def browse(kind: str, slug: str | None = None, page: int = 1) -> Listing:
+# The explore pages' own orders (Apple CMS by=). The genre page itself keeps an order of its own.
+ORDERS = {"time": "最近更新", "time_add": "最新上架", "hits": "總人氣", "hits_week": "本週人氣"}
+
+
+def sorts(kind: str, slug: str | None = None) -> list[SortOption]:
+    if kind not in GENRES:
+        return []
+    return [SortOption(id="default", label="預設")] + [SortOption(id=k, label=v) for k, v in ORDERS.items()]
+
+
+def _explore(tid: str, by: str, page: int) -> str:
+    return f"/explore/{tid}--{by}---------.html" if page <= 1 else f"/explore/{tid}--{by}------{page}---.html"
+
+
+def browse(kind: str, slug: str | None = None, page: int = 1, sort: str = "") -> Listing:
     page = max(1, min(int(page), 1000))
     kind = (kind or "").strip().lower()
     if kind in ("featured", "hot"):
@@ -238,11 +252,12 @@ def browse(kind: str, slug: str | None = None, page: int = 1) -> Listing:
     if kind == "top":
         return Listing(items=parse_cards(_get("/label/top.html"))[:48], page=1, has_next=False, title="排行榜")
     if kind == "update":
-        html = _get("/explore/2--time---------.html" if page <= 1 else f"/explore/2--time------{page}---.html")
-        return _listing(html, page, "最近更新", "2")
+        return _listing(_get(_explore("2", "time", page)), page, "最近更新", "2")
     if kind not in GENRES:
         raise UnsafeURL("unknown category")
     tid, title = GENRES[kind]
+    if sort in ORDERS:
+        return _listing(_get(_explore(tid, sort, page)), page, title, tid)
     path = f"/genre/{tid}.html" if page <= 1 else f"/genre/{tid}-{page}.html"
     return _listing(_get(path), page, title, tid)
 

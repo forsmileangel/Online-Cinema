@@ -9,6 +9,10 @@ const RATE_KEY = "cinema.rate";
 const RATES = [0.75, 1, 1.25, 1.5, 2];
 // Seconds between in-place retries of the same stream before a fresh source is resolved.
 const NETWORK_RETRIES = [1, 3, 6, 10, 15, 20];
+// Pixels above the controls that still count as aiming at them, not at the picture.
+const CONTROL_MARGIN = 24;
+// A press that moves further than this before release is a drag, not a click.
+const DRAG_SLOP = 6;
 
 function loadRate() {
   try {
@@ -95,6 +99,7 @@ export function Player({
   const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
+  const controlsRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const castingRef = useRef(casting);
   castingRef.current = casting;
@@ -157,7 +162,11 @@ export function Player({
   const [osd, setOsd] = useState<{ text: string; id: number } | null>(null);
   const osdTimer = useRef<number | null>(null);
   const [rate, setRate] = useState(loadRate);
-  const lastPointer = useRef("");
+  // A fresh player under a resting mouse counts as mouse-driven, so hovering the controls keeps them up.
+  const [firstPointer] = useState(() => (window.matchMedia?.("(hover: hover) and (pointer: fine)").matches ? "mouse" : ""));
+  const lastPointer = useRef(firstPointer);
+  const downAt = useRef<{ x: number; y: number } | null>(null);
+  const suppressClickUntil = useRef(0);
   const lastTap = useRef(0);
   const recovery = useRef({ media: 0, mediaAt: 0, network: 0, timer: 0 });
   const [show, setShow] = useState(true);
@@ -536,13 +545,17 @@ export function Player({
     setHoverX(ratio);
     setHoverTime(ratio * duration);
     setScrub(ratio);
+    bumpUi();
   }
   function onBarMove(e: PointerEvent<HTMLDivElement>) {
     if (!canSeek) return;
     const ratio = ratioFromEvent(e);
     setHoverX(ratio);
     setHoverTime(ratio * duration);
-    if (dragging.current) setScrub(ratio);
+    if (dragging.current) {
+      setScrub(ratio);
+      bumpUi(); // Touch moves do not reach the player's own handler.
+    }
   }
   function onBarUp(e: PointerEvent<HTMLDivElement>) {
     e.stopPropagation();
@@ -551,11 +564,13 @@ export function Player({
     dragging.current = false;
     setScrub(null);
     setHoverX(null);
+    suppressClickUntil.current = Date.now() + 350;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     seekTo(ratio);
   }
 
   function cancelScrub() {
+    if (dragging.current) suppressClickUntil.current = Date.now() + 350;
     dragging.current = false;
     setScrub(null);
     setHoverX(null);
@@ -679,9 +694,34 @@ export function Player({
     setShow(true);
     if (hideTimer.current) window.clearTimeout(hideTimer.current);
     hideTimer.current = window.setTimeout(() => {
-      if (lastPointer.current === "mouse" && rootRef.current?.querySelector(".controls")?.matches(":hover")) bumpUi();
+      const hovered = lastPointer.current !== "touch" && !!rootRef.current?.querySelector(".controls:hover, .next-up:hover");
+      if (dragging.current || hovered) bumpUi();
       else if (!pausedRef.current) setShow(false);
     }, 2200);
+  }
+
+  // The strip from just above the seek bar down to the bottom edge belongs to the controls,
+  // even while they are hidden: a click there must never pause, resume or go fullscreen.
+  function inControlBand(y: number) {
+    const controls = controlsRef.current;
+    return !!controls && y >= controls.getBoundingClientRect().top - CONTROL_MARGIN;
+  }
+
+  function onPressStart(e: PointerEvent<HTMLDivElement>) {
+    // Capture phase: the seek bar stops its own events before they bubble up here.
+    lastPointer.current = e.pointerType;
+    downAt.current = { x: e.clientX, y: e.clientY };
+    // Reaching for the controls cancels a picture click that is still waiting to pause or resume.
+    if (clickWait.current && ((e.target as HTMLElement).closest(".controls, .next-up") || inControlBand(e.clientY))) {
+      window.clearTimeout(clickWait.current);
+      clickWait.current = null;
+    }
+  }
+
+  function onSurfaceMove(e: PointerEvent<HTMLDivElement>) {
+    if (e.pointerType === "touch") return;
+    lastPointer.current = e.pointerType;
+    bumpUi();
   }
 
   function hideNow() {
@@ -715,6 +755,11 @@ export function Player({
   function onSurfaceClick(e: MouseEvent<HTMLDivElement>) {
     const el = e.target as HTMLElement;
     if (el.closest(".controls, .next-up")) return;
+    const down = downAt.current;
+    // The end of a drag (on the picture or the seek bar) is not a click.
+    if (Date.now() < suppressClickUntil.current) return;
+    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > DRAG_SLOP) return;
+    if (inControlBand(e.clientY)) { bumpUi(); return; }
     if (lastPointer.current === "touch") { onTap(e); return; }
     if (clickWait.current) {
       window.clearTimeout(clickWait.current);
@@ -730,7 +775,7 @@ export function Player({
   function onSurfaceDblClick(e: MouseEvent<HTMLDivElement>) {
     e.preventDefault();
     const el = e.target as HTMLElement;
-    if (el.closest(".controls, .next-up") || lastPointer.current === "touch") return;
+    if (el.closest(".controls, .next-up") || lastPointer.current === "touch" || inControlBand(e.clientY)) return;
     if (clickWait.current) {
       window.clearTimeout(clickWait.current);
       clickWait.current = null;
@@ -755,6 +800,16 @@ export function Player({
     const onWheel = (e: WheelEvent) => wheelRef.current(e);
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    const controls = controlsRef.current;
+    if (!root || !controls || typeof ResizeObserver === "undefined") return;
+    // The next-episode prompt sits just above the controls, whatever their height.
+    const observer = new ResizeObserver(() => root.style.setProperty("--ctrl-h", `${controls.offsetHeight}px`));
+    observer.observe(controls);
+    return () => observer.disconnect();
   }, []);
 
   function releaseSelect(e: ChangeEvent<HTMLSelectElement>) {
@@ -787,8 +842,8 @@ export function Player({
     <div
       ref={rootRef}
       className={`player ${show || isPaused || casting ? "show" : ""}`}
-      onPointerDown={(e) => { lastPointer.current = e.pointerType; }}
-      onPointerMove={(e) => { if (e.pointerType !== "touch") bumpUi(); }}
+      onPointerDownCapture={onPressStart}
+      onPointerMove={onSurfaceMove}
       onMouseLeave={hideNow}
       onClick={onSurfaceClick}
       onDoubleClick={onSurfaceDblClick}
@@ -801,7 +856,7 @@ export function Player({
       ) : null}
       {pill ? <div className={`loading-pill${waiting ? " spin" : ""}`} role="status">{pill}</div> : null}
       <div className="overlay">
-        <div className="controls" onPointerUp={releaseFocus}>
+        <div className="controls" ref={controlsRef} onPointerUp={releaseFocus}>
           <div
             className="seek"
             ref={barRef}

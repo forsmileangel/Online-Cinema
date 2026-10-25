@@ -365,6 +365,10 @@ button.chip { font: inherit; }
   position: relative; height: 18px; cursor: pointer; touch-action: none;
   display: flex; align-items: center;
 }
+/* Invisible extra reach, so a near miss still grabs the bar instead of pausing the picture. */
+.seek::before { content: ""; position: absolute; left: 0; right: 0; top: -14px; bottom: -4px; }
+@media (pointer: coarse) { .seek::before { top: -20px; } }
+.tv-mode .seek::before { top: -22px; }
 .seek-track { position: relative; width: 100%; height: 6px; border-radius: 99px; background: #3a3a3a; }
 .seek[aria-disabled="true"] { cursor: not-allowed; opacity: .55; }
 .seek:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
@@ -582,7 +586,8 @@ select.field, .field {
   font-size: 18px; font-weight: 600; pointer-events: none; white-space: nowrap;
 }
 .next-up {
-  position: absolute; right: 16px; bottom: 112px; z-index: 4;
+  /* --ctrl-h is measured by the player, so the prompt never covers the seek bar. */
+  position: absolute; right: 16px; bottom: calc(var(--ctrl-h, 96px) + 12px); z-index: 4;
   display: inline-flex; align-items: center; gap: 6px; max-width: min(60%, 320px);
   background: rgba(20,20,20,.9); color: #fff; border: 1px solid #666; border-radius: 10px;
   padding: 10px 14px; font-weight: 600; white-space: nowrap; transition: bottom .2s;
@@ -590,9 +595,8 @@ select.field, .field {
 .next-up span { color: #ccc; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
 .next-up:hover, .next-up:focus-visible { background: var(--accent); border-color: var(--accent); }
 .next-up:hover span, .next-up:focus-visible span { color: #fff; }
-.player:not(.show) .next-up { bottom: 24px; }
 @media (max-width: 720px) {
-  .next-up { right: 10px; bottom: 132px; padding: 8px 10px; font-size: 13px; }
+  .next-up { right: 10px; padding: 8px 10px; font-size: 13px; }
   .osd { font-size: 15px; padding: 8px 14px; }
 }
 
@@ -660,6 +664,7 @@ select.field, .field {
 /* Phones: one compact control row that fits inside the 16:9 picture. */
 @media (max-width: 560px) {
   .controls { padding: 6px 8px 8px; }
+  .seek::before { bottom: 0; } /* The compact button row sits right below the bar. */
   .ctrl-row { flex-wrap: nowrap; align-items: center; gap: 2px; margin-top: 2px; }
   .ctrl-row button { padding: 4px; min-width: 32px; }
   .ctrl-row .times { font-size: 12px; white-space: nowrap; }

@@ -91,7 +91,17 @@ html.is-list { scrollbar-gutter: stable; }
 .chip.all { color: var(--text); }
 .picks-group { margin-bottom: 14px; }
 .picks-title { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
-.home-row { margin-bottom: 28px; }
+.home-row { margin-bottom: 26px; }
+/* Categories are parted by a solid rule; a short lead in the brand colours marks where each title starts. */
+.home-row:not(:first-child) { position: relative; padding-top: 20px; }
+.home-row:not(:first-child)::before {
+  content: ""; position: absolute; inset: 0 0 auto; height: 1px;
+  background: color-mix(in srgb, var(--text) 18%, transparent);
+}
+.home-row:not(:first-child)::after {
+  content: ""; position: absolute; top: -1px; left: 0; width: 56px; height: 3px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
 .muted { color: var(--muted); }
 .phone-connection { margin-top: 24px; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
 .phone-connection .row-head { align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -531,6 +541,9 @@ select.field, .field {
   outline-offset: 3px;
 }
 .tv-mode .h1, .tv-mode .row-head h2 { font-size: 26px; }
+/* Seen from the sofa, a 1px rule between categories all but vanishes. */
+.tv-mode .home-row:not(:first-child)::before { height: 2px; }
+.tv-mode .home-row:not(:first-child)::after { width: 72px; height: 4px; }
 .badge-src {
   font-size: 11px; color: var(--muted); margin-top: 2px;
 }

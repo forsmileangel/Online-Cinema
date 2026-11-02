@@ -45,7 +45,13 @@ async function responseError(res: Response) {
   return Object.assign(new Error(msg), { status: res.status, retryAfterSeconds: Number.isFinite(seconds) ? seconds : 0 });
 }
 
-async function req<T>(path: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
+// No request waits forever: a hung server shows a message instead of a spinner.
+const DEFAULT_TIMEOUT = 20000;
+const LIST_TIMEOUT = 30000;
+/** Fired when the server refuses this device (not paired, or the code was changed); App shows the pairing page. */
+export const UNAUTHORIZED_EVENT = "cinema:unauthorized";
+
+async function req<T>(path: string, init?: RequestInit, timeoutMs = DEFAULT_TIMEOUT): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   let timedOut = false;
@@ -63,10 +69,15 @@ async function req<T>(path: string, init?: RequestInit, timeoutMs?: number): Pro
         ...(init?.headers || {}),
       },
     });
-    if (!res.ok) throw await responseError(res);
+    if (!res.ok) {
+      if (res.status === 401 && !path.startsWith("/api/tv/pair")) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+      throw await responseError(res);
+    }
     return await res.json() as T;
   } catch (e) {
     if (timedOut) throw new Error("等待回應逾時，請重試");
+    // fetch rejects with a TypeError when the server cannot be reached at all.
+    if (e instanceof TypeError) throw new Error("無法連線到伺服器，請確認服務是否在執行");
     throw e;
   } finally {
     clearTimeout(timer);
@@ -100,7 +111,7 @@ function peek<T>(key: string, maxAge = LIST_TTL): T | undefined {
   return hit && Date.now() - hit.at < maxAge ? (hit.data as T) : undefined;
 }
 
-async function list<T>(path: string, signal?: AbortSignal, timeoutMs?: number): Promise<T> {
+async function list<T>(path: string, signal?: AbortSignal, timeoutMs = LIST_TIMEOUT): Promise<T> {
   const data = await req<T>(path, { signal }, timeoutMs);
   keep(path, data);
   return data;
@@ -186,7 +197,7 @@ export const api = {
     duration_sec: number;
     source?: string;
     episode_id?: string;
-  }) => req("/api/history", { method: "PUT", body: JSON.stringify(body) }),
+  }, keepalive = false) => req("/api/history", { method: "PUT", body: JSON.stringify(body), keepalive }),
   clearHistory: () => req("/api/history", { method: "DELETE" }),
   settings: () => req<Settings>("/api/settings"),
   connection: (signal?: AbortSignal) => req<ConnectionInfo>("/api/connection", { signal, cache: "no-store" }, 10000),

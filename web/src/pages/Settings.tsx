@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { CARD_SIZES, loadCardSize, saveCardSize, type CardSize } from "../cardSize";
 import type { Settings } from "../types";
@@ -29,10 +29,29 @@ export function SettingsPage() {
     api.settings().then(setS).catch((e: Error) => setMsg(e.message));
   }, []);
 
+  // Dragging a colour fires many changes a second; the server gets one write after the hand stops.
+  const themeTimer = useRef(0);
+  const themePending = useRef<SavedTheme | null>(null);
+  const sendTheme = () => {
+    window.clearTimeout(themeTimer.current);
+    const next = themePending.current;
+    themePending.current = null;
+    if (next) void api.saveSettings({ theme: JSON.stringify(next) }).catch(() => {});
+  };
+  useEffect(() => sendTheme, []);
   function apply(next: SavedTheme) {
     setTheme(next);
     saveTheme(next);
-    void api.saveSettings({ theme: JSON.stringify(next) }).catch(() => {});
+    themePending.current = next;
+    window.clearTimeout(themeTimer.current);
+    themeTimer.current = window.setTimeout(sendTheme, 300);
+  }
+
+  const failed = (what: string) => (e: Error) => setMsg(`${what}失敗：${e.message}`);
+
+  function clearHistory() {
+    if (!window.confirm("確定要清除所有觀看紀錄嗎？清除後無法復原。")) return;
+    void api.clearHistory().then(() => setMsg("觀看紀錄已清除")).catch(failed("清除觀看紀錄"));
   }
 
   function pickPreset(id: string) {
@@ -122,7 +141,7 @@ export function SettingsPage() {
               void api.saveSettings({ lan_tv: e.target.checked }).then((n) => {
                 setS(n);
                 setMsg(e.target.checked ? "已開啟投放。請重啟「Online Cinema Server」工作；手動啟動時重開 start.bat。" : "已改回僅本機，重啟服務後生效。");
-              })
+              }).catch(failed("更新投放設定"))
             }
           />{" "}
           允許投放（區網）
@@ -157,7 +176,7 @@ export function SettingsPage() {
               void api.tvRotate().then((r) => {
                 setS({ ...s, tv_code: r.tv_code });
                 setMsg("已換新配對碼，請用新網址開電視");
-              })
+              }).catch(failed("更換配對碼"))
             }
           >
             更換配對碼
@@ -170,12 +189,12 @@ export function SettingsPage() {
         <button
           className="btn alt"
           type="button"
-          onClick={() => void api.clearHistory().then(() => setMsg("觀看紀錄已清除"))}
+          onClick={clearHistory}
         >
           清除觀看紀錄
         </button>
       </div>
-      {msg ? <p className="status">{msg}</p> : null}
+      {msg ? <p className="status" role="status">{msg}</p> : null}
     </div>
   );
 }

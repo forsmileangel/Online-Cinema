@@ -105,6 +105,10 @@ export function Watch() {
   const [autoplay, setAutoplay] = useState(loadAutoplay);
   const posRef = useRef(0);
   const lastSent = useRef(0);
+  // The latest point the player reported, and what was last written, so pause/leave can save at once.
+  const progress = useRef({ pos: 0, dur: 0 });
+  const lastSaved = useRef(-1);
+  const [notice, setNotice] = useState("");
   const epRailRef = useRef<HTMLDivElement>(null);
   const endLock = useRef("");
   const autoplayRef = useRef(autoplay);
@@ -123,8 +127,11 @@ export function Watch() {
     setEpId("");
     setEpTouched(false);
     setResumeEp("");
+    setNotice("");
     posRef.current = 0;
     lastSent.current = 0;
+    progress.current = { pos: 0, dur: 0 };
+    lastSaved.current = -1;
     endLock.current = "";
     const controller = new AbortController();
     api
@@ -206,15 +213,11 @@ export function Watch() {
     return () => controller.abort();
   }, [epId, id, source, autoplay, resolveAttempt]);
 
-  const onProgress = useCallback(
-    (pos: number, dur: number) => {
-      posRef.current = pos;
-      recoveryProgress.current(pos);
-      if (dur > 1 && pos < dur - 1) endLock.current = "";
+  const save = useCallback(
+    (pos: number, dur: number, keepalive = false) => {
       if (!data || dur < 1) return;
-      const now = Date.now();
-      if (now - lastSent.current < 5000) return;
-      lastSent.current = now;
+      lastSent.current = Date.now();
+      lastSaved.current = pos;
       void api.saveHistory({
         id: data.id,
         title: data.title,
@@ -223,10 +226,49 @@ export function Watch() {
         duration_sec: dur,
         source: data.source || source,
         episode_id: epId || undefined,
-      }).catch(() => {});
+      }, keepalive).catch(() => {});
     },
     [data, source, epId],
   );
+
+  const onProgress = useCallback(
+    (pos: number, dur: number) => {
+      posRef.current = pos;
+      recoveryProgress.current(pos);
+      if (dur > 1 && pos < dur - 1) endLock.current = "";
+      if (dur >= 1) progress.current = { pos, dur };
+      if (Date.now() - lastSent.current < 5000) return;
+      save(pos, dur);
+    },
+    [save],
+  );
+
+  // Pausing, finishing, leaving the page or closing the tab writes the position at once instead of
+  // up to five seconds later. keepalive lets the request finish after the page is gone.
+  const flush = useCallback((keepalive = false) => {
+    const { pos, dur } = progress.current;
+    if (dur < 1 || pos === lastSaved.current) return;
+    save(pos, dur, keepalive);
+  }, [save]);
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+  useEffect(() => {
+    const now = () => flushRef.current(false);
+    const gone = () => flushRef.current(true);
+    const hidden = () => { if (document.visibilityState === "hidden") flushRef.current(true); };
+    // Media events do not bubble; capturing at the document still sees the video's.
+    document.addEventListener("pause", now, true);
+    document.addEventListener("ended", now, true);
+    window.addEventListener("pagehide", gone);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      document.removeEventListener("pause", now, true);
+      document.removeEventListener("ended", now, true);
+      window.removeEventListener("pagehide", gone);
+      document.removeEventListener("visibilitychange", hidden);
+      flushRef.current(true);
+    };
+  }, [id, source]);
 
   const origMode = showOrig;
   const origTitle = data?.original_title || data?.title || "";
@@ -312,6 +354,7 @@ export function Watch() {
   function pickEpisode(nextId: string) {
     if (nextId === epId) return;
     if (cast.active) { void cast.episode(nextId); return; }
+    flush(); // The episode being left keeps its position.
     recovery.stop();
     setEpisodeError("");
     setRetryResume(null);
@@ -321,6 +364,8 @@ export function Watch() {
     setReturnPosition(0);
     posRef.current = 0;
     lastSent.current = 0;
+    progress.current = { pos: 0, dur: 0 };
+    lastSaved.current = -1;
     try {
       localStorage.setItem(epKey(source, id), nextId);
     } catch {
@@ -354,9 +399,14 @@ export function Watch() {
   async function toggleFav() {
     if (!data) return;
     const src = data.source || source;
-    if (data.favorited) await api.removeFavorite(data.id, src);
-    else await api.addFavorite({ id: data.id, title: data.title, cover: data.cover, source: src });
-    setData({ ...data, favorited: !data.favorited });
+    try {
+      if (data.favorited) await api.removeFavorite(data.id, src);
+      else await api.addFavorite({ id: data.id, title: data.title, cover: data.cover, source: src });
+      setData({ ...data, favorited: !data.favorited });
+      setNotice("");
+    } catch (e) {
+      setNotice(`${data.favorited ? "取消收藏" : "收藏"}失敗：${e instanceof Error ? e.message : "請重試"}`);
+    }
   }
 
   if (err) return (
@@ -488,7 +538,9 @@ export function Watch() {
                     setZhTitle(t.title);
                     setZhDesc(t.description);
                     setShowOrig(false);
+                    setNotice("");
                   })
+                  .catch((e: Error) => setNotice(`翻譯失敗：${e.message}`))
                   .finally(() => setTranslating(false));
               }}
             >
@@ -496,6 +548,7 @@ export function Watch() {
             </button>
           ) : null}
         </div>
+        {notice ? <p className="status" role="alert">{notice}</p> : null}
         {data.actresses.length ? (
           <div className="cast-block">
             <div className="cast-label">演員</div>

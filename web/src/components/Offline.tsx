@@ -25,7 +25,8 @@ function resume(item: Download, restart = false) {
 }
 /** The value that moves for this phase: downloaded share, or the MP4 being written. */
 const moving = (item: Download) => item.phase === "preparing" ? item.prepare_progress || 0 : item.progress;
-function useDownloads(source?: string, id?: string) {
+/** Download states; `watching` (the panel is open) polls while something moves, otherwise it only checks now and then. */
+function useDownloads(source?: string, id?: string, watching = true) {
   const [items, setItems] = useState<Download[]>([]);
   const [cleanup, setCleanup] = useState<Cleanup | null>(null);
   const [freeBytes, setFreeBytes] = useState<number | null>(null);
@@ -53,18 +54,19 @@ function useDownloads(source?: string, id?: string) {
             samples.current.set(item.id, { phase: item.phase, points: [...points, [now, value] as [number, number]].filter(([t]) => now - t <= 180) });
           }
           setItems(result.items); setCleanup(result.cleanup || null); setFreeBytes(typeof result.free_bytes === "number" ? result.free_bytes : null); setLoaded(true); setError("");
-          // Poll quickly only while something is moving.
-          next = (result.items as Download[]).some(active) ? 3000 : 15000;
+          // Poll quickly only while something is moving; a closed panel just keeps its summary roughly right.
+          const working = (result.items as Download[]).some(active);
+          next = watching ? (working ? 3000 : 15000) : working ? 60000 : 0;
         }
-      } catch (err) { if (alive) setError(err instanceof Error ? err.message : "無法取得下載狀態"); next = 5000; }
+      } catch (err) { if (alive) setError(err instanceof Error ? err.message : "無法取得下載狀態"); next = watching ? 5000 : 0; }
       finally { busy = false; }
-      if (alive && !document.hidden) timer = window.setTimeout(() => void refresh(), next);
+      if (alive && next && !document.hidden) timer = window.setTimeout(() => void refresh(), next);
     };
     const visible = () => { if (!document.hidden) void refresh(); };
     document.addEventListener("visibilitychange", visible);
     void refresh();
     return () => { alive = false; window.clearTimeout(timer); document.removeEventListener("visibilitychange", visible); };
-  }, [source, id, revision]);
+  }, [source, id, revision, watching]);
   function eta(item: Download) {
     const points = samples.current.get(item.id)?.points || [];
     if (points.length < 2) return "";
@@ -129,7 +131,8 @@ export function OfflinePanel({ source, id, title, episodes, current, local, onRe
   source: string; id: string; title: string; episodes: Episode[]; current: string; local: boolean;
   onReady: (items: { episode: string; url: string }[]) => void;
 }) {
-  const { items, error, eta, refresh } = useDownloads(source, id);
+  const [expanded, setExpanded] = useState(false);
+  const { items, error, eta, refresh } = useDownloads(source, id, expanded);
   const dialog = useRef<HTMLDialogElement>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [height, setHeight] = useState(720);
@@ -167,7 +170,7 @@ export function OfflinePanel({ source, id, title, episodes, current, local, onRe
       refresh(); setBusy(false);
     }
   }
-  return <details style={{ padding: "8px 16px" }} onKeyDown={e => e.stopPropagation()}>
+  return <details style={{ padding: "8px 16px" }} open={expanded} onToggle={e => setExpanded(e.currentTarget.open)} onKeyDown={e => e.stopPropagation()}>
     <summary>離線下載{local ? " · 目前使用本地影片" : ""}{done ? ` · 已下載 ${done} 集` : ""}{items.some(active) ? " · 下載進行中" : ""}</summary>
     <p className="muted">點擊才下載整集；完成後保留在 D:\AI工作區\離線影片。720p 適合平板與 Nest Hub，會用顯示卡加速整理，來源本來就是 720p 時直接封裝。中斷後保留已下載部分並自動續傳；播放時下載會自動讓路，不會被取消。</p>
     <button className="btn" disabled={busy} onClick={open}>選擇集數下載</button>

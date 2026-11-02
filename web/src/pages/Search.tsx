@@ -78,7 +78,7 @@ function SourceResults({ q, src, page }: { q: string; src: string; page: number 
   if (view.error && view.error.page === page) {
     return (
       <div>
-        <div className="err">
+        <div className="err" role="alert">
           {view.error.message}。
           <button className="btn alt" type="button" onClick={view.retry}>
             重新搜尋

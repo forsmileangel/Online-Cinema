@@ -536,6 +536,8 @@ select.field, .field {
 /* A TV is watched from across the room: big cards whatever the card-size setting says. */
 .tv-mode { --card-min: 420px; --card-min-p: 220px; --card-gap: 22px; --card-title: 16px; }
 .tv-mode .poster .dur { font-size: 14px; }
+/* The remote treats the player as one block: a ring shows it is the thing the arrows act on. */
+.tv-mode .player:focus { outline: 3px solid var(--accent); outline-offset: -3px; }
 .tv-mode .card:focus, .tv-mode .chip:focus, .tv-mode .more:focus, .tv-mode .nav a:focus, .tv-mode select:focus {
   outline: 3px solid var(--accent);
   outline-offset: 3px;

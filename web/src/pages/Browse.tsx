@@ -76,7 +76,7 @@ export function Browse() {
   const heading = view.head?.title || (slug ? decodeURIComponent(slug) : "") || BROWSE_TITLES[kind] || kind;
   if (view.error && view.error.page === page) {
     return (
-      <div className="err">
+      <div className="err" role="alert">
         {view.error.message}。<button className="btn alt" type="button" onClick={view.retry}>重新載入</button>
         {page > 1 ? <button className="btn alt" type="button" onClick={() => jump(1)}>從第 1 頁開始</button> : null}
       </div>

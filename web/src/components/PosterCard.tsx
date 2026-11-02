@@ -121,7 +121,7 @@ export function PosterCard({ item, onRemove, removeLabel = "移除", showSource 
           </button>
         ) : null}
       </div>
-      <Link className="card-title-link" data-tv="1" to={href} onClick={opened}>
+      <Link className="card-title-link" to={href} tabIndex={-1} onClick={opened}>
         <div className="title" title={label}>{label}</div>
       </Link>
       {showSource && item.source ? <div className="badge-src">{SRC_BADGE[item.source] || item.source}</div> : null}

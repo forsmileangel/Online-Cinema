@@ -466,8 +466,14 @@ export function Player({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (["INPUT", "SELECT", "TEXTAREA", "BUTTON", "A"].includes(tag)) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName || "";
+      if (["INPUT", "SELECT", "TEXTAREA"].includes(tag)) return;
+      // Keys belong to the player only while nothing else on the page has focus (episode chips,
+      // cast bar...); a focused player button keeps Space/Enter for itself.
+      const inPlayer = !target || target === document.body || !!rootRef.current?.contains(target);
+      if (!inPlayer && !e.key.startsWith("Media")) return;
+      if (["BUTTON", "A"].includes(tag) && (e.key === " " || e.code === "Space" || e.key === "Enter")) return;
       if (casting) {
         if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
           e.preventDefault();
@@ -603,10 +609,21 @@ export function Player({
   }
 
   function toggleFs() {
-    const wrap = videoRef.current?.closest<HTMLElement>(".player-screen") || videoRef.current?.parentElement;
+    const video = videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
+    const wrap = (video?.closest<HTMLElement>(".player-screen") || video?.parentElement) as
+      (HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void }) | null;
     if (!wrap) return;
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void wrap.requestFullscreen();
+    const doc = document as Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => Promise<void> | void };
+    const unsupported = () => setNotice("這個瀏覽器不支援全螢幕");
+    if (document.fullscreenElement || doc.webkitFullscreenElement) {
+      void Promise.resolve(document.exitFullscreen ? document.exitFullscreen() : doc.webkitExitFullscreen?.()).catch(() => undefined);
+      return;
+    }
+    // iPhone Safari has no element full screen: only the video itself can go full screen.
+    const fallback = () => { if (video?.webkitEnterFullscreen) video.webkitEnterFullscreen(); else unsupported(); };
+    const request = wrap.requestFullscreen ? () => wrap.requestFullscreen() : wrap.webkitRequestFullscreen ? () => wrap.webkitRequestFullscreen!() : null;
+    if (!request) { try { fallback(); } catch { unsupported(); } return; }
+    Promise.resolve().then(request).catch(() => { try { fallback(); } catch { unsupported(); } });
   }
 
   function changeLevel(next: number) {
@@ -842,6 +859,7 @@ export function Player({
     <div
       ref={rootRef}
       className={`player ${show || isPaused || casting ? "show" : ""}`}
+      tabIndex={-1}
       onPointerDownCapture={onPressStart}
       onPointerMove={onSurfaceMove}
       onMouseLeave={hideNow}

@@ -11,7 +11,7 @@ import { Search } from "./pages/Search";
 import { SettingsPage } from "./pages/Settings";
 import { OfflineLibrary } from "./components/Offline";
 import { Watch } from "./pages/Watch";
-import { api } from "./api";
+import { api, UNAUTHORIZED_EVENT } from "./api";
 import { GridMetricsContext, measureKey, useMeasureGrid } from "./hooks/useGridMetrics";
 import { useSource } from "./source";
 
@@ -58,7 +58,10 @@ export function App() {
   useEffect(() => {
     let alive = true;
     api.tvStatus().then((r) => { if (alive) setPaired(r.paired); }).catch(() => { if (alive) setPaired(true); });
-    return () => { alive = false; };
+    // A refused request (pairing expired, code changed) brings the pairing page up at once.
+    const refused = () => { if (alive) setPaired(false); };
+    window.addEventListener(UNAUTHORIZED_EVENT, refused);
+    return () => { alive = false; window.removeEventListener(UNAUTHORIZED_EVENT, refused); };
   }, []);
 
   useEffect(() => {
@@ -96,7 +99,15 @@ export function App() {
     document.documentElement.classList.toggle("is-list", list);
   }, [list]);
 
-  if (!pairCode && paired === null) return <div className="app-shell"><main className="page"><p role="status">連線中…</p></main></div>;
+  // The phone pairing link works on a device that is not paired yet: that is what it is for.
+  if (loc.pathname === "/connect") {
+    return (
+      <div className="app-shell">
+        <main className="page"><PhonePair /></main>
+      </div>
+    );
+  }
+  // Pages render while the pairing check is still out; a refusal switches to the pairing page.
   if (!pairCode && paired === false) return <PairPrompt />;
 
   if (pairCode) {
@@ -125,7 +136,6 @@ export function App() {
       <main ref={setMainEl} className={watch ? "page page-watch" : list ? "page page-wide" : "page"}>
         <GridMetricsContext.Provider value={metrics}>
           <Routes>
-            <Route path="/connect" element={<PhonePair />} />
             {appRoutes("")}
             {appRoutes("/tv")}
             <Route path="*" element={<Navigate to="/" replace />} />

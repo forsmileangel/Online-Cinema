@@ -92,6 +92,7 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
     let timer: ReturnType<typeof setTimeout>;
     const controller = new AbortController();
     async function poll() {
+      clearTimeout(timer);
       try {
         const next = await api.castSession(active!.uuid, controller.signal);
         if (cancelled) return;
@@ -99,10 +100,13 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
           setStatus(null); setUncertain(true); setMsg("電視播放已變更，本機保持暫停。請重新投放或回本機。");
         } else if (!pending.current) remember(next);
       } catch (e) { if (!cancelled) { setUncertain(true); setMsg(e instanceof Error ? e.message : "無法確認電視狀態"); } }
-      finally { if (!cancelled) timer = setTimeout(poll, 1500); }
+      // A tab nobody is looking at asks far less often; showing it again asks at once.
+      finally { if (!cancelled) timer = setTimeout(poll, document.hidden ? 10000 : 1500); }
     }
+    const shown = () => { if (!document.hidden && !cancelled) void poll(); };
+    document.addEventListener("visibilitychange", shown);
     void poll();
-    return () => { cancelled = true; clearTimeout(timer); controller.abort(); };
+    return () => { cancelled = true; clearTimeout(timer); controller.abort(); document.removeEventListener("visibilitychange", shown); };
   }, [active]);
 
   const busy = requesting || !!status?.pending_action || status?.phase === "waking" || status?.phase === "loading" || status?.phase === "reconnecting";

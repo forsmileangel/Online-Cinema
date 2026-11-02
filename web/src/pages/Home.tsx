@@ -105,7 +105,7 @@ export function Home() {
   // Rows are cut to whole lines from the measured width, so restore only once that is known.
   useScrollRestore(!!data && metrics !== null);
 
-  if (!data && err) return <div className="err">載入失敗：{err}。<button className="btn alt" type="button" onClick={() => setRetry(retry + 1)}>重新載入</button></div>;
+  if (!data && err) return <div className="err" role="alert">載入失敗：{err}。<button className="btn alt" type="button" onClick={() => setRetry(retry + 1)}>重新載入</button></div>;
   if (!data) return <SkeletonRows rows={3} portrait={isPortrait(source)} />;
 
   return (

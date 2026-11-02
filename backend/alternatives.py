@@ -4,9 +4,9 @@ from __future__ import annotations
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeout, as_completed
 
-from . import sites, zh
+from . import pools, sites, zh
 from .catalog import SOURCE_GROUPS, SOURCE_LABELS
 
 DEADLINE = 30
@@ -95,10 +95,9 @@ def find(source: str, video_id: str, title: str) -> list[dict]:
         return dict(source=src, label=SOURCE_LABELS.get(src, src), id=card.id, title=found.title or card.title,
                     count=len(found.episodes), episodes=sorted([n, ep_id] for n, ep_id in numbered.items()))
 
-    pool = ThreadPoolExecutor(max_workers=6)
-    matches, results = [], []
+    matches, results, searches, details = [], [], [], []
     try:
-        searches = [pool.submit(search, src) for src in others]
+        searches = [pools.fanout.submit(search, src) for src in others]
         try:
             for future in as_completed(searches, timeout=max(1, deadline - time.monotonic())):
                 try:
@@ -107,7 +106,7 @@ def find(source: str, video_id: str, title: str) -> list[dict]:
                     continue  # A refused or failing site simply offers nothing.
         except FuturesTimeout:
             pass
-        details = [pool.submit(detail, src, card) for src, card in matches]
+        details = [pools.fanout.submit(detail, src, card) for src, card in matches]
         try:
             for future in as_completed(details, timeout=max(1, deadline - time.monotonic())):
                 try:
@@ -117,7 +116,7 @@ def find(source: str, video_id: str, title: str) -> list[dict]:
         except FuturesTimeout:
             pass
     finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+        pools.cancel_pending(searches + details)  # Running ones finish on their own; queued ones never start.
     results.sort(key=lambda item: (-len(item["episodes"]), item["source"]))
     with _lock:
         _cache[key] = (time.monotonic(), results)

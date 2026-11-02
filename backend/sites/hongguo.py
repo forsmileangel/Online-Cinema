@@ -6,12 +6,12 @@ import json
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
-from .. import http_client, zh
+from .. import http_client, pools, zh
 from ..hls_proxy import proxied_media
 from ..models import Card, Episode, Listing, PickChip, PickGroup, SortOption, Tag, VideoDetail
 from ..security import (
@@ -253,14 +253,13 @@ def home_bundle() -> tuple[list[tuple[str, str, list[Card]]], list[PickGroup]]:
         return kind, title, parse_cards(page)[:24]
 
     got: dict[str, tuple[str, str, list[Card]]] = {}
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futs = {pool.submit(one, item): item[0] for item in extra}
-        for fut in as_completed(futs):
-            kind = futs[fut]
-            try:
-                got[kind] = fut.result()
-            except Exception:
-                continue
+    futs = {pools.io.submit(one, item): item[0] for item in extra}
+    for fut in as_completed(futs):
+        kind = futs[fut]
+        try:
+            got[kind] = fut.result()
+        except Exception:
+            continue
     for kind, title, _key in extra:
         if kind in got and got[kind][2]:
             rows.append(got[kind])
@@ -445,14 +444,13 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
     play_path = f"/vodplay/{video_id}-1-{want}.html"
     detail_html = ""
     play_html = ""
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        f_detail = pool.submit(_get, f"/voddetail/{video_id}.html")
-        f_play = pool.submit(_get, play_path)
-        try:
-            detail_html = f_detail.result()
-        except Exception:
-            detail_html = ""
-        play_html = f_play.result()
+    f_detail = pools.io.submit(_get, f"/voddetail/{video_id}.html")
+    f_play = pools.io.submit(_get, play_path)
+    try:
+        detail_html = f_detail.result()
+    except Exception:
+        detail_html = ""
+    play_html = f_play.result()
     data = _player_data(play_html)
     src = _play_url(data)
     nxt = (data.get("url_next") or "").replace("\\/", "/").strip()

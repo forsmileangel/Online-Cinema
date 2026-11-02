@@ -622,19 +622,27 @@ def _cleanup_expired():
         _release(handle)
 
 
+MAINTENANCE_SECONDS = 15
+_wake = threading.Event()
+
+
 def _start_maintenance():
+    """Start the maintenance thread, or nudge it: a new or deleted job is looked at now, not on the next pass."""
     global _maintenance_started
+    _wake.set()
     with _worker_lock:
         if _maintenance_started:
             return
         _maintenance_started = True
         def maintain():
             while True:
+                # Every pass lists the whole offline folder; once a second it kept two processes busy for nothing.
+                _wake.wait(MAINTENANCE_SECONDS)
+                _wake.clear()
                 try:
                     _maintenance_once()
                 except Exception:
                     logging.getLogger(__name__).exception('Offline cleanup failed')
-                time.sleep(1)
         threading.Thread(target=maintain, name='offline-cleanup', daemon=True).start()
 
 
@@ -785,9 +793,22 @@ def _retry(operation, folder, on_retry=None, position=None):
 
 def _completed(path, url):
     previous = _read(path.with_name(path.name + '.download.json')) or {}
-    return (not path.is_symlink() and path.exists() and previous.get('complete')
-            and previous.get('url') == url and path.stat().st_size > 0
-            and path.stat().st_size == previous.get('size') and _file_hash(path) == previous.get('sha256'))
+    if path.is_symlink() or not path.exists() or not previous.get('complete') or previous.get('url') != url:
+        return False
+    stat = path.stat()
+    if stat.st_size <= 0 or stat.st_size != previous.get('size'):
+        return False
+    # The hash was checked when the download finished and its modification time recorded; a file
+    # that still has that time is the same file. Only older records without it are hashed again.
+    if previous.get('mtime') == stat.st_mtime:
+        return True
+    return _file_hash(path) == previous.get('sha256')
+
+
+def _finished_record(path, record):
+    """The metadata of a file that is complete now: size, hash and the time that proves it unchanged."""
+    stat = path.stat()
+    return {**record, 'complete': True, 'size': stat.st_size, 'sha256': _file_hash(path), 'mtime': stat.st_mtime}
 
 
 def _download(url, path, folder, limit=None, *, resume_partial=False, progress=None, on_retry=None):
@@ -804,8 +825,7 @@ def _download_once(url, path, folder, limit=None, *, resume_partial=False, progr
     metadata = path.with_name(path.name + '.download.json')
     previous = _read(metadata) or {}
     size = path.stat().st_size if path.exists() else 0
-    if (previous.get('complete') and previous.get('url') == url and size > 0
-            and size == previous.get('size') and _file_hash(path) == previous.get('sha256')):
+    if _completed(path, url):
         if progress: progress(100)
         return
     offset = 0
@@ -837,7 +857,7 @@ def _download_once(url, path, folder, limit=None, *, resume_partial=False, progr
             raise ValueError('此片源無法安全續傳，請選「重新下載」')
         offset = size
         if offset == previous['total']:
-            _write(metadata, {**previous, 'complete': True, 'size': size, 'sha256': _file_hash(path)})
+            _write(metadata, _finished_record(path, previous))
             if progress: progress(100)
             return
     if not offset:
@@ -846,7 +866,7 @@ def _download_once(url, path, folder, limit=None, *, resume_partial=False, progr
             if limit and len(cached) > limit:
                 raise ValueError('影片分段過大，已停止下載')
             path.write_bytes(cached)
-            _write(metadata, dict(url=url, complete=True, size=len(cached), sha256=hashlib.sha256(cached).hexdigest()))
+            _write(metadata, _finished_record(path, dict(url=url)))
             if progress: progress(100)
             return
     referer, impersonate = hls_proxy._media_context(url)
@@ -919,7 +939,8 @@ def _download_once(url, path, folder, limit=None, *, resume_partial=False, progr
     finally:
         http_client.close_response(response)
         if record is not None and path.exists():
-            record.update(size=path.stat().st_size, sha256=_file_hash(path))
+            stat = path.stat()
+            record.update(size=stat.st_size, sha256=_file_hash(path), mtime=stat.st_mtime)
             _write(metadata, record)
 
 

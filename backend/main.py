@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeout, as_completed
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
@@ -14,7 +14,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from fastapi.staticfiles import StaticFiles
 
 from . import catalog
 from . import cast as chromecast
@@ -27,9 +26,12 @@ from . import alternatives, display, home_fill, next_buffer, offline, sorting, t
 from . import hls_proxy
 from . import host_guard
 from . import http_client
+from . import img_cache
+from . import pools
 from . import settings as S
 from . import sites
 from . import translate as translate_mod
+from . import web_serving
 from .models import (
     FavoriteIn,
     PrefetchIn,
@@ -92,6 +94,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="Online Cinema", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+app.add_middleware(web_serving.Compressed)  # Innermost: only what the routes answer is compressed.
 app.add_middleware(AccessGuard)
 app.add_middleware(
     CORSMiddleware,
@@ -347,8 +350,7 @@ def _multi_search_lines(q: str, sources: list[str]):
     def line(result: dict) -> str:
         return json.dumps(result, ensure_ascii=False) + "\n"
 
-    pool = ThreadPoolExecutor(max_workers=6)
-    futures = {pool.submit(one, src): src for src in sources}
+    futures = {pools.fanout.submit(one, src): src for src in sources}
     sent = set()
     try:
         for future in as_completed(futures, timeout=MULTI_SEARCH_SECONDS):
@@ -360,7 +362,7 @@ def _multi_search_lines(q: str, sources: list[str]):
                 yield line(future.result() if future.done() else {"source": src, "ok": False, "error": "搜尋逾時，請稍後再試"})
     finally:
         # A slow site keeps its worker until its own request timeout; queued ones never start.
-        pool.shutdown(wait=False, cancel_futures=True)
+        pools.cancel_pending(futures)
 
 
 @app.get("/api/search/multi")
@@ -436,12 +438,7 @@ def translate_text(body: TranslateIn):
     desc = (body.description or "")[:2000]
     names = [(n or "")[:200] for n in (body.names or [])[:40]]
     try:
-        out_names: list[str] = []
-        if names:
-            from concurrent.futures import ThreadPoolExecutor
-
-            with ThreadPoolExecutor(max_workers=8) as pool:
-                out_names = list(pool.map(translate_mod.to_zh_tw, names))
+        out_names = pools.map_in(pools.fanout, translate_mod.to_zh_tw, names) if names else []
         return TranslateOut(
             title=translate_mod.to_zh_tw(title) if title else "",
             description=translate_mod.to_zh_tw(desc) if desc else "",
@@ -707,42 +704,40 @@ def _detect_image_media_type(data: bytes) -> str:
     return ""
 
 
-@app.get("/api/img")
-def image_proxy(u: str = Query(..., max_length=500)):
+def fetch_image(raw: str) -> Response:
+    """One cover straight from its site, with the referer that site expects."""
+    url = assert_image_url(raw)
+    host = (urlparse(url).hostname or "").lower()
+    if host in {"img.mmov.app", "image.mmov.app"}:
+        referer = "https://hk.mmov.app/"
+    elif sites.hongguo.is_cover_host(host):
+        referer = "https://www.hongguoapp.cn/"
+    elif host.endswith("1777cdn.com") or host.endswith("gimyai.tw"):
+        referer = "https://gimyai.tw/"
+    elif host.endswith("dramasq.io"):
+        referer = "https://dramasq.io/"
+    elif "chinaq" in host:
+        referer = "https://chinaq.fun/"
+    else:
+        referer = f"https://{host}/"
+    r = http_client.fetch_bytes(url, referer=referer, allowed_hosts=IMAGE_HOSTS, timeout=20, impersonate="chrome131")
     try:
-        url = assert_image_url(unquote(u))
-        host = (urlparse(url).hostname or "").lower()
-        if host in {"img.mmov.app", "image.mmov.app"}:
-            referer = "https://hk.mmov.app/"
-            imp = "chrome131"
-        elif sites.hongguo.is_cover_host(host):
-            referer = "https://www.hongguoapp.cn/"
-            imp = "chrome131"
-        elif host.endswith("1777cdn.com") or host.endswith("gimyai.tw"):
-            referer = "https://gimyai.tw/"
-            imp = "chrome131"
-        elif host.endswith("dramasq.io"):
-            referer = "https://dramasq.io/"
-            imp = "chrome131"
-        elif "chinaq" in host:
-            referer = "https://chinaq.fun/"
-            imp = "chrome131"
-        else:
-            referer = f"https://{host}/"
-            imp = "chrome131"
-        r = http_client.fetch_bytes(
-            url, referer=referer, allowed_hosts=IMAGE_HOSTS, timeout=20, impersonate=imp
-        )
-        try:
-            data = r.content
-        finally:
-            http_client.close_response(r)
-        if len(data) > 8_000_000:
-            raise UnsafeURL("image too large")
-        ctype = _detect_image_media_type(data)
-        if not ctype:
-            raise ValueError("upstream response is not a supported image")
-        return Response(content=data, media_type=ctype, headers={"Cache-Control": "private, max-age=86400"})
+        data = r.content
+    finally:
+        http_client.close_response(r)
+    if len(data) > 8_000_000:
+        raise UnsafeURL("image too large")
+    ctype = _detect_image_media_type(data)
+    if not ctype:
+        raise ValueError("upstream response is not a supported image")
+    return Response(content=data, media_type=ctype)
+
+
+@app.get("/api/img")
+async def image_proxy(request: Request, u: str = Query(..., max_length=500)):
+    # Served from the image pool and a disk cache: a listing's covers never take the media threads.
+    try:
+        return await img_cache.respond(request, unquote(u), fetch_image)
     except Exception as e:
         raise _err(e) from e
 
@@ -790,7 +785,7 @@ def hls_proxy_ep(request: Request, u: str = Query(..., max_length=4000)):
 
 
 if (DIST / "assets").is_dir():
-    app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
+    app.mount("/assets", web_serving.ImmutableAssets(directory=DIST / "assets"), name="assets")
 
 
 @app.get("/")

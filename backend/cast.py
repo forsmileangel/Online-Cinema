@@ -7,12 +7,11 @@ import socket
 import threading
 import time
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import wraps
 from urllib.parse import parse_qs, urlparse, urlencode, urlunparse
 
-from . import db, dlna, hls_proxy, lan, read_ahead
+from . import db, dlna, hls_proxy, lan, pools, read_ahead
 from .settings import PORT
 
 _lock = threading.RLock()
@@ -74,8 +73,8 @@ def _reusable_cast(device) -> bool:
 
 def discover(timeout: float = 6) -> list[dict]:
     global _browsers, _casts
-    with _lock, ThreadPoolExecutor(max_workers=2) as pool:
-        renderers = pool.submit(dlna.discover, min(timeout, 4))
+    with _lock:
+        renderers = pools.fanout.submit(dlna.discover, min(timeout, 4))
         # get_listed_chromecasts requires an explicit list; no filter finds NOTHING.
         chromecasts, browser = _cc().get_chromecasts(timeout=timeout, tries=1, retry_wait=1)
         previous_browsers = set(_browsers.values())

@@ -50,15 +50,6 @@ def is_network_failure(error: Exception) -> bool:
         })
 
 
-def reset_session(impersonate: str | None = None) -> None:
-    global _session, _impersonate
-    with _lock:
-        if impersonate:
-            _impersonate = impersonate
-        _session = requests.Session(impersonate=_impersonate)
-    _tls.media = None
-
-
 def _accept_language() -> str:
     return "zh-TW,zh-Hant;q=0.9,zh;q=0.8,ja;q=0.5"
 

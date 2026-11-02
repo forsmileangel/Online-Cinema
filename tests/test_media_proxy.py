@@ -35,7 +35,7 @@ class MediaProxyTests(unittest.TestCase):
         with patch.object(main, "assert_image_url", side_effect=lambda value: value), patch.object(
             http_client, "fetch_bytes", return_value=response
         ):
-            image = main.image_proxy(url)
+            image = main.fetch_image(url)
         self.assertEqual(image.media_type, "image/jpeg")
         self.assertEqual(image.body, jpeg)
         response.close.assert_called_once()
@@ -44,9 +44,8 @@ class MediaProxyTests(unittest.TestCase):
         with patch.object(main, "assert_image_url", side_effect=lambda value: value), patch.object(
             http_client, "fetch_bytes", return_value=html_response
         ):
-            with self.assertRaises(HTTPException) as raised:
-                main.image_proxy(url)
-        self.assertEqual(raised.exception.status_code, 502)
+            with self.assertRaises(ValueError):  # The route turns this into a 502.
+                main.fetch_image(url)
         html_response.close.assert_called_once()
 
     def test_all_sources_use_the_same_proxy_with_correct_referer(self):

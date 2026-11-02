@@ -25,6 +25,9 @@ def parse_store_id(raw: str) -> tuple[str, str]:
     return "hongguo", raw
 
 _local = threading.local()
+_init_lock = threading.Lock()
+# Database files whose tables and key migration this process has already checked.
+_initialized: set[str] = set()
 
 
 def connect() -> sqlite3.Connection:
@@ -35,9 +38,26 @@ def connect() -> sqlite3.Connection:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
-        _init(conn)
+        # Every worker thread opens its own connection; the schema check and the key migration
+        # (a scan of favorites and history) run once per file, not once per thread.
+        with _init_lock:
+            if str(path) not in _initialized:
+                _init(conn)
+                _initialized.add(str(path))
         _local.conn = conn
     return conn
+
+
+def reset() -> None:
+    """Forget cached connections, settings and the initialised files (tests that move the database)."""
+    with _init_lock:
+        _initialized.clear()
+    with _settings_lock:
+        _settings.clear()
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        conn.close()
+        _local.conn = None
 
 
 def _init(conn: sqlite3.Connection) -> None:
@@ -88,9 +108,29 @@ def _migrate_keys(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+# Settings are read on every request (LAN gate, pairing secret, locale) and written rarely, so each
+# connection keeps the table in memory after one load; every write drops all copies.
+_settings_lock = threading.Lock()
+_settings: dict[int, tuple[sqlite3.Connection, dict[str, str]]] = {}
+
+
+def _settings_table() -> dict[str, str]:
+    conn = connect()
+    with _settings_lock:
+        entry = _settings.get(id(conn))
+        if entry is not None and entry[0] is conn:
+            return entry[1]
+    rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    table = {str(row["key"]): str(row["value"]) for row in rows}
+    with _settings_lock:
+        if len(_settings) >= 128:
+            _settings.clear()
+        _settings[id(conn)] = (conn, table)
+    return table
+
+
 def get_setting(key: str, default: str = "") -> str:
-    row = connect().execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    return str(row["value"]) if row else default
+    return _settings_table().get(key, default)
 
 
 def set_setting(key: str, value: str) -> None:
@@ -99,6 +139,15 @@ def set_setting(key: str, value: str) -> None:
         (key, value),
     )
     connect().commit()
+    with _settings_lock:
+        _settings.clear()
+
+
+def delete_setting(key: str) -> None:
+    connect().execute("DELETE FROM settings WHERE key = ?", (key,))
+    connect().commit()
+    with _settings_lock:
+        _settings.clear()
 
 
 def list_favorites() -> list[dict]:

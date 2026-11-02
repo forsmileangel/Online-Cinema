@@ -18,6 +18,10 @@ CACHE_TTL = 7200
 MAX_SEGMENT = 32 * 1024 * 1024
 _disk_lock = threading.RLock()
 _lock = threading.RLock()
+# path -> (size, mtime) of every cached segment, listed once, so storing one does not stat the whole
+# directory each time. Reads still look at the file itself; a store that finds the entry stale fixes it.
+_index: dict = {}
+_index_dir = None
 _jobs = {}
 _started = False
 _foreground = 0
@@ -34,17 +38,36 @@ def _path(url):
     return _directory() / (hashlib.sha256(url.encode()).hexdigest() + '.bin')
 
 
+def _files():
+    global _index_dir
+    directory = _directory()
+    if _index_dir != directory:
+        _index.clear()
+        for path in directory.glob('*.bin'):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            _index[path] = (stat.st_size, stat.st_mtime)
+        _index_dir = directory
+    return _index
+
+
 def cached(url):
     with _disk_lock:
         path = _path(url)
         try:
-            if time.time() - path.stat().st_mtime > CACHE_TTL:
+            stat = path.stat()
+            if time.time() - stat.st_mtime > CACHE_TTL:
                 path.unlink(missing_ok=True)
+                _files().pop(path, None)
                 return None
             data = path.read_bytes()
             os.utime(path, None)
+            _files()[path] = (stat.st_size, time.time())
             return data
         except FileNotFoundError:
+            _files().pop(path, None)
             return None
 
 
@@ -52,17 +75,22 @@ def _store(url, data):
     if not data or len(data) > MAX_SEGMENT:
         raise ValueError('分段過大，已停止預載')
     with _disk_lock:
-        files = sorted(_directory().glob('*.bin'), key=lambda p: p.stat().st_mtime)
-        now, total = time.time(), sum(p.stat().st_size for p in files)
-        for path in files:
-            stat = path.stat()
-            if now - stat.st_mtime > CACHE_TTL or total + len(data) > CACHE_BYTES:
-                total -= stat.st_size
+        files = _files()
+        now, total = time.time(), sum(size for size, _ in files.values())
+        for path in sorted(files, key=lambda p: files[p][1]):
+            size, mtime = files[path]
+            if now - mtime > CACHE_TTL or total + len(data) > CACHE_BYTES:
+                total -= size
+                files.pop(path, None)
                 path.unlink(missing_ok=True)
+            elif not path.exists():
+                total -= size  # Removed behind our back: never counts towards the limit.
+                files.pop(path, None)
         path = _path(url)
         temporary = path.with_suffix('.part')
         temporary.write_bytes(data)
         temporary.replace(path)
+        files[path] = (len(data), path.stat().st_mtime)
 
 
 def foreground(active):

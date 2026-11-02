@@ -172,6 +172,25 @@ def listing(sources, source=None, video_id=None):
     return sorted(result, key=lambda item: item.get('created', 0), reverse=True)
 
 
+ACTIVE = frozenset({'queued', 'preparing', 'downloading', 'retrying', 'cancelling', 'deleting'})
+
+
+def active_count() -> int:
+    """Jobs a restart would interrupt (they resume afterwards, but the restart is better timed around them)."""
+    count = 0
+    if ROOT.exists():
+        for path in ROOT.iterdir():
+            if not re.fullmatch(r'[0-9a-f]{64}', path.name) or not path.is_dir():
+                continue
+            try:
+                item = status(path.name)
+            except (OSError, ValueError):
+                continue
+            if item and item.get('phase') in ACTIVE:
+                count += 1
+    return count
+
+
 def local_detail(source, video_id, episode=None):
     # The first episode remains the default; opening a library link is explicit.
     candidates = [identity(source, video_id, episode)] if episode else [i['id'] for i in listing({source}, source, video_id) if i['phase'] == 'complete']

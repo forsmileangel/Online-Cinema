@@ -446,6 +446,16 @@ def get(uuid: str):
     return session.get()
 
 
+FINISHED = frozenset({"stopped", "ended", "replaced", "error"})
+
+
+def active_count() -> int:
+    """TVs this server is currently playing to or starting; a restart would cut them off."""
+    with _lock:
+        sessions = list(_sessions.values())
+    return sum(1 for s in sessions if s.get().get("phase") not in FINISHED)
+
+
 def control(uuid: str, session_id: str, action: str, **values):
     get(uuid)
     with _lock:

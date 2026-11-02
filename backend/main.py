@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import parse_qs, unquote, urlparse
@@ -22,6 +25,7 @@ from . import lan
 from . import tv_session
 from . import alternatives, display, home_fill, next_buffer, offline, sorting, terms
 from . import hls_proxy
+from . import host_guard
 from . import http_client
 from . import settings as S
 from . import sites
@@ -58,6 +62,8 @@ from .security import (
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "web" / "dist"
+logger = logging.getLogger(__name__)
+
 
 class AccessGuard(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -73,23 +79,23 @@ class AccessGuard(BaseHTTPMiddleware):
                 return await call_next(request)
             if path in ("/api/tv/pair", "/api/tv/status", "/api/health", "/favicon.ico"):
                 return await call_next(request)
-            if not tv_session.valid_cookie(request.cookies.get("cinema_tv")):
-                if path.startswith("/api/") and not path.startswith("/api/cast"):
-                    return JSONResponse({"detail": "請先用配對碼連電視"}, status_code=401)
+            if not tv_session.valid_cookie(request.cookies.get("cinema_tv")) and path.startswith("/api/"):
+                return JSONResponse({"detail": "請先用配對碼連電視"}, status_code=401)
         return await call_next(request)
 
 
-app = FastAPI(title="Online Cinema", docs_url=None, redoc_url=None, openapi_url=None)
-app.router.add_event_handler("startup", offline._start_maintenance)
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    host_guard.refresh()  # This PC's names, before any request is judged by them.
+    offline._start_maintenance()
+    yield
+
+
+app = FastAPI(title="Online Cinema", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 app.add_middleware(AccessGuard)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:6970",
-        "http://localhost:6970",
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-    ],
+    allow_origins=host_guard.allowed_origins(),
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Content-Type"],
 )
@@ -125,6 +131,10 @@ async def media_cors(request: Request, call_next):
     return response
 
 
+# Outermost: a request for another host name, or a cross-site POST, is refused before anything else runs.
+app.add_middleware(host_guard.HostGuard)
+
+
 def _err(exc: Exception, status: int = 400) -> HTTPException:
     if isinstance(exc, SourceUnavailable):
         return HTTPException(404, str(exc))
@@ -136,8 +146,30 @@ def _err(exc: Exception, status: int = 400) -> HTTPException:
         return HTTPException(502, "來源網域暫時查不到，請稍後重試")
     if isinstance(exc, UnsafeURL):
         return HTTPException(status, "請求被拒絕")
+    # Anything else is unexpected: keep the traceback, the client only sees the generic message.
+    logger.error("unexpected %s: %s", type(exc).__name__, exc, exc_info=exc)
     return HTTPException(502, "來源站暫時無法使用")
 
+
+_version_cache: str | None = None
+
+
+def _version() -> str:
+    """The commit this server runs, read once; empty when git or the repository is not there."""
+    global _version_cache
+    if _version_cache is None:
+        try:
+            out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True,
+                                 timeout=5, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            _version_cache = out.stdout.strip() if out.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            _version_cache = ""
+    return _version_cache
+
+
+def busy_state() -> dict:
+    """What a restart would interrupt: TVs being played to and downloads under way."""
+    return {"casts": cast_session.active_count(), "offline_jobs": offline.active_count()}
 
 
 @app.get("/api/offline")
@@ -209,7 +241,7 @@ def offline_media(key: str, request: Request):
 
 @app.get("/api/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "version": _version(), "busy": busy_state()}
 
 
 def _src(source: str | None) -> str:

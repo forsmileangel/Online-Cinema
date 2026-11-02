@@ -7,7 +7,8 @@ import webbrowser
 
 import uvicorn
 
-from .settings import PORT
+from . import logsetup
+from .settings import PORT, app_dir
 
 
 def _open():
@@ -21,6 +22,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
+    logsetup.configure(app_dir() / "server-logs")
     host = "0.0.0.0" if db.get_setting("lan_tv", "") == "1" else "127.0.0.1"
     if not args.no_browser:
         threading.Thread(target=_open, daemon=True).start()
@@ -30,6 +32,7 @@ def main() -> None:
         port=PORT,
         reload=False,
         log_level="info",
+        log_config=None,  # logsetup owns the handlers; uvicorn's records flow into them
         proxy_headers=False,
         forwarded_allow_ips="",
     )

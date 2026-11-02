@@ -13,7 +13,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo 檢查套件...
-".venv\Scripts\python.exe" -m pip install -q -r requirements.txt
+".venv\Scripts\python.exe" -m pip install -q -r requirements.lock
 if errorlevel 1 (
   echo 套件安裝失敗。
   pause

@@ -52,6 +52,8 @@ class PairingTests(unittest.TestCase):
         self.assertEqual(asyncio.run(call("/api/tv/status")).status_code, 200)
         self.assertEqual(asyncio.run(call("/api/tv/pair")).status_code, 200)
         self.assertEqual(asyncio.run(call("/api/home")).status_code, 401)
+        self.assertEqual(asyncio.run(call("/api/cast/devices")).status_code, 401)  # casting is not open to unpaired devices
+        self.assertEqual(asyncio.run(call("/api/hls")).status_code, 200)  # the TV itself fetches media without a cookie
 
     def test_typed_code_pairs_with_any_case_and_spacing(self):
         for typed in ("ABC234", "abc234", " abc 234 "):

@@ -24,14 +24,18 @@ from . import settings
 CACHE_BYTES = 256 * 1024 * 1024
 MAX_ITEMS = 2000
 TTL = 86400.0
-UPSTREAM_LIMIT = 6
+UPSTREAM_LIMIT = 8
+# A cover that could not be fetched is not asked for again for this long: the page's own retry and
+# the next page view get the same answer at once instead of waiting on the dead host again.
+FAILURE_TTL = 60.0
 EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/avif": "avif", "image/bmp": "bmp"}
 MIME = {ext: mime for mime, ext in EXT.items()}
 
-pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="img")
+pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix="img")
 _upstream = threading.BoundedSemaphore(UPSTREAM_LIMIT)
 _lock = threading.Lock()
 _inflight: dict[str, threading.Event] = {}
+_failed: dict[str, tuple[float, Exception]] = {}
 # url hash -> (path, size, fetched at, last used); the directory is listed once, then kept here.
 _index: dict[str, tuple[Path, int, float, float]] = {}
 _scanned_dir: Path | None = None
@@ -128,6 +132,9 @@ def fetch(url: str, loader: Callable[[str], Response]) -> tuple[bytes, str, str]
     key = _key(url)
     while True:
         with _lock:
+            failure = _failed.get(key)
+            if failure and failure[0] > time.monotonic():
+                raise failure[1]
             waiting = _inflight.get(key)
             if waiting is None:
                 _inflight[key] = done = threading.Event()
@@ -142,6 +149,12 @@ def fetch(url: str, loader: Callable[[str], Response]) -> tuple[bytes, str, str]
         data, mime = bytes(fetched.body), fetched.media_type or ""
         etag = _store(url, data, mime)
         return data, mime, etag
+    except Exception as error:
+        with _lock:
+            if len(_failed) >= 512:
+                _failed.clear()
+            _failed[key] = (time.monotonic() + FAILURE_TTL, error)
+        raise
     finally:
         with _lock:
             _inflight.pop(key, None)
@@ -167,4 +180,5 @@ def clear() -> None:
     global _scanned_dir
     with _lock:
         _index.clear()
+        _failed.clear()
         _scanned_dir = None

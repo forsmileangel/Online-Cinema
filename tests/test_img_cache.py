@@ -90,14 +90,20 @@ class ImgCacheTests(unittest.TestCase):
         self.assertEqual(img_cache._serve("https://img.example/a.jpg", self.loader, etag).status_code, 304)
         self.loader.assert_called_once()
 
-    def test_a_failed_fetch_caches_nothing_and_frees_the_next_caller(self):
+    def test_a_failed_fetch_is_answered_from_memory_for_a_minute_then_tried_again(self):
         loader = Mock(side_effect=ValueError("not an image"))
         with self.assertRaises(ValueError):
             img_cache.fetch("https://img.example/bad.jpg", loader)
+        # The page's own retry and the next page view: the same failure at once, no dead host waited on.
         with self.assertRaises(ValueError):
             img_cache.fetch("https://img.example/bad.jpg", loader)
-        self.assertEqual(loader.call_count, 2)
+        self.assertEqual(loader.call_count, 1)
         self.assertEqual(img_cache._inflight, {})
+        self.assertEqual(len(list(Path(self.tmp.name, "img-cache").iterdir())), 0)
+        with patch.object(img_cache.time, "monotonic", return_value=time.monotonic() + img_cache.FAILURE_TTL + 1):
+            loader.side_effect = lambda url: Response(content=JPEG, media_type="image/jpeg")
+            self.assertEqual(img_cache.fetch("https://img.example/bad.jpg", loader)[0], JPEG)
+        self.assertEqual(loader.call_count, 2)
 
 
 if __name__ == "__main__":

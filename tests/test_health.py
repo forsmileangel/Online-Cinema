@@ -95,8 +95,8 @@ class HealthTests(unittest.TestCase):
         with patch.object(offline, "_active_known", None), patch.object(offline, "_active_counting", False), \
                 patch.object(offline, "_count_active", return_value=4):
             self.assertEqual(offline.active_count(), 0, "nothing known yet: no wait")
-            for _ in range(100):
-                if offline._active_known:
+            for _ in range(250):
+                if offline._active_known and offline._active_known[1] == 4 and not offline._active_counting:
                     break
                 time.sleep(0.02)
             self.assertEqual(offline.active_count(), 4)
@@ -104,7 +104,8 @@ class HealthTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(main, "mirrors"), "MissAV mirrors are only in Midnight Cinema")
     def test_health_and_settings_never_probe_for_a_mirror(self):
         from backend import mirrors
-        with patch.object(mirrors, "_current", ""), patch.object(mirrors, "detect", side_effect=AssertionError("probed")):
+        # The download count is not under test here: a real background count must not outlive the test.
+        with patch.object(mirrors, "_current", ""), patch.object(mirrors, "detect", side_effect=AssertionError("probed")),                 patch.object(offline, "active_count", return_value=0):
             self.assertEqual(asyncio.run(main.health())["mirror"], "")
             self.assertEqual(mirrors.cached_host(), "")
         with patch.object(mirrors, "_current", "missav.ai"):

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { api } from "./api";
 import type { SourceInfo } from "./types";
@@ -13,9 +13,16 @@ type Ctx = {
   tv: boolean;
   showOriginal: boolean;
   setShowOriginal: (v: boolean) => void;
+};
+
+// Translations arrive in batches while a list is shown; they live in their own context so only the
+// cards that read them re-render, not every subscriber of the source settings.
+type ZhCtx = {
   zhMap: Record<string, string>;
   queueZh: (text: string) => void;
 };
+
+const ZhContext = createContext<ZhCtx>({ zhMap: {}, queueZh: () => {} });
 
 // Shown until /api/settings answers; the server list is the source of truth.
 const DEFAULT_SOURCES: Src[] = [
@@ -36,8 +43,6 @@ const SourceCtx = createContext<Ctx>({
   tv: false,
   showOriginal: false,
   setShowOriginal: () => {},
-  zhMap: {},
-  queueZh: () => {},
 });
 
 export function SourceProvider({ children }: { children: ReactNode }) {
@@ -60,14 +65,14 @@ export function SourceProvider({ children }: { children: ReactNode }) {
     }
   });
 
-  function setShowOriginal(v: boolean) {
+  const setShowOriginal = useCallback((v: boolean) => {
     setShowOriginalState(v);
     try {
       localStorage.setItem("cinema.showOriginal", v ? "1" : "0");
     } catch {
       /* ignore */
     }
-  }
+  }, []);
 
   const [zhMap, setZhMap] = useState<Record<string, string>>({});
   const zhMapRef = useRef<Record<string, string>>({});
@@ -110,7 +115,7 @@ export function SourceProvider({ children }: { children: ReactNode }) {
     }, 50);
   }, []);
 
-  function setSource(s: string) {
+  const setSource = useCallback((s: string) => {
     const ids = sources.map((x) => x.id);
     const v = ids.includes(s) ? s : "hongguo";
     setSourceState(v);
@@ -120,7 +125,7 @@ export function SourceProvider({ children }: { children: ReactNode }) {
       /* ignore */
     }
     void api.saveSettings({ source: v }).catch(() => {});
-  }
+  }, [sources]);
 
   useEffect(() => {
     api
@@ -140,17 +145,27 @@ export function SourceProvider({ children }: { children: ReactNode }) {
       .catch(() => {});
   }, []);
 
+  // The same object until something in it changes, so a translation batch or a route change does not
+  // re-render every card that only wants the prefix.
+  const value = useMemo(
+    () => ({ source, setSource, sources, prefix, tv, showOriginal, setShowOriginal }),
+    [source, setSource, sources, prefix, tv, showOriginal, setShowOriginal],
+  );
+  const zh = useMemo(() => ({ zhMap, queueZh }), [zhMap, queueZh]);
   return (
-    <SourceCtx.Provider
-      value={{ source, setSource, sources, prefix, tv, showOriginal, setShowOriginal, zhMap, queueZh }}
-    >
-      {children}
+    <SourceCtx.Provider value={value}>
+      <ZhContext.Provider value={zh}>{children}</ZhContext.Provider>
     </SourceCtx.Provider>
   );
 }
 
 export function useSource() {
   return useContext(SourceCtx);
+}
+
+/** Chinese titles for sources whose listings arrive in English (123AV), filled in as batches return. */
+export function useZh() {
+  return useContext(ZhContext);
 }
 
 export function sourceGroup(sources: Src[], id: string) {

@@ -1,4 +1,3 @@
-import { prepareAnigamer } from "./anigamer";
 import type { Alternative, Card, HistoryItem, HomePayload, Listing, MultiResult, Settings, VideoDetail } from "./types";
 
 export type CastStatus = {
@@ -180,7 +179,8 @@ export const api = {
   removeHistory: (id: string, source: string) =>
     req(withSource(`/api/history/${encodeURIComponent(id)}`, source), { method: "DELETE" }),
   video: async (id: string, source = "hongguo", signal?: AbortSignal, ep?: string) => {
-    if (source === "anigamer") await prepareAnigamer(id, ep, signal);
+    // The 動畫瘋 preparation (and hls.js behind it) is only fetched when one is played.
+    if (source === "anigamer") await (await import("./anigamer")).prepareAnigamer(id, ep, signal);
     const q = ep ? `?ep=${encodeURIComponent(ep)}` : "";
     return req<VideoDetail>(`/api/video/${encodeURIComponent(source)}/${encodeURIComponent(id)}${q}`, { signal }, 60000);
   },

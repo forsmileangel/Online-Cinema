@@ -12,6 +12,7 @@ export function PosterRow({
   moreLabel = "更多",
   note,
   lines,
+  priority,
 }: {
   title: string;
   to?: string;
@@ -20,6 +21,8 @@ export function PosterRow({
   note?: string | null;
   /** Show only this many full lines of cards (the rest is behind "更多"); all cards when unset. */
   lines?: number;
+  /** A row at the top of the page: its first covers load at once instead of waiting for lazy loading. */
+  priority?: boolean;
 }) {
   const { prefix } = useSource();
   const metrics = useGridMetrics();
@@ -41,8 +44,8 @@ export function PosterRow({
       </div>
       {note ? <p className="row-note">{note}</p> : null}
       <div className={`grid${shape}`} style={cols ? { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` } : undefined}>
-        {shown.map((item) => (
-          <PosterCard key={`${item.source || ""}:${item.id}`} item={item} showSource={false} />
+        {shown.map((item, index) => (
+          <PosterCard key={`${item.source || ""}:${item.id}`} item={item} showSource={false} priority={!!priority && index < 6} />
         ))}
       </div>
     </section>

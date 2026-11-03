@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate, useNavigationType } from "react-router-dom";
 import { TopBar } from "./components/TopBar";
 import { PhonePair } from "./components/PhoneConnection";
@@ -6,12 +6,14 @@ import { PairPrompt } from "./components/PairPrompt";
 import { TvKeys } from "./components/TvKeys";
 import { Browse } from "./pages/Browse";
 import { Home } from "./pages/Home";
-import { Library } from "./pages/Library";
 import { Search } from "./pages/Search";
-import { SettingsPage } from "./pages/Settings";
-import { OfflineLibrary } from "./components/Offline";
-import { Watch } from "./pages/Watch";
 import { api, UNAUTHORIZED_EVENT } from "./api";
+
+// The home page needs none of these: each is fetched the first time it is opened.
+const Watch = lazy(() => import("./pages/Watch").then((m) => ({ default: m.Watch })));
+const Library = lazy(() => import("./pages/Library").then((m) => ({ default: m.Library })));
+const SettingsPage = lazy(() => import("./pages/Settings").then((m) => ({ default: m.SettingsPage })));
+const OfflineLibrary = lazy(() => import("./components/Offline").then((m) => ({ default: m.OfflineLibrary })));
 import { GridMetricsContext, measureKey, useMeasureGrid } from "./hooks/useGridMetrics";
 import { useSource } from "./source";
 
@@ -135,11 +137,13 @@ export function App() {
       <TopBar />
       <main ref={setMainEl} className={watch ? "page page-watch" : list ? "page page-wide" : "page"}>
         <GridMetricsContext.Provider value={metrics}>
-          <Routes>
-            {appRoutes("")}
-            {appRoutes("/tv")}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          <Suspense fallback={<div className="empty" role="status">載入中…</div>}>
+            <Routes>
+              {appRoutes("")}
+              {appRoutes("/tv")}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
         </GridMetricsContext.Provider>
       </main>
     </div>

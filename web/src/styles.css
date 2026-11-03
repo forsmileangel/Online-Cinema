@@ -34,6 +34,7 @@ body {
   margin: 0;
   font-family: "Segoe UI", "Noto Sans TC", "PingFang TC", sans-serif;
   color: var(--text);
+  background: var(--bg); /* webOS 22 */
   background:
     radial-gradient(1200px 500px at 10% -10%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 50%),
     radial-gradient(900px 400px at 90% 0%, color-mix(in srgb, var(--accent-2) 10%, transparent), transparent 45%),
@@ -49,6 +50,7 @@ button { cursor: pointer; }
   position: fixed; inset: 0 0 auto 0; height: var(--bar);
   display: flex; align-items: center; gap: 16px;
   padding: 0 20px;
+  background: var(--bg); /* webOS 22 */
   background: color-mix(in srgb, var(--bg) 86%, transparent);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(16px);
@@ -61,6 +63,7 @@ button { cursor: pointer; }
 .brand-mark {
   width: 28px; height: 28px; border-radius: 8px;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 0 3px rgba(128, 128, 128, 0.22); /* webOS 22 */
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 .search {
@@ -70,6 +73,7 @@ button { cursor: pointer; }
   flex: 1; border: 1px solid var(--line); background: var(--bg-2);
   border-radius: 999px; padding: 10px 16px; outline: none;
 }
+.search input:focus { border-color: var(--accent); } /* webOS 22 */
 .search input:focus { border-color: color-mix(in srgb, var(--accent) 70%, transparent); }
 .nav { display: flex; gap: 8px; margin-left: auto; }
 .nav a, .ghost {
@@ -96,6 +100,7 @@ html.is-list { scrollbar-gutter: stable; }
 .home-row:not(:first-child) { position: relative; padding-top: 20px; }
 .home-row:not(:first-child)::before {
   content: ""; position: absolute; inset: 0 0 auto; height: 1px;
+  background: rgba(128, 128, 128, 0.22); /* webOS 22 */
   background: color-mix(in srgb, var(--text) 18%, transparent);
 }
 .home-row:not(:first-child)::after {
@@ -124,7 +129,7 @@ html.is-list { scrollbar-gutter: stable; }
   gap: var(--card-gap);
 }
 
-.card { color: inherit; display: block; min-width: 0; }
+.card { color: inherit; display: block; min-width: 0; content-visibility: auto; contain-intrinsic-size: auto 340px; }
 .poster-shell { position: relative; }
 .poster-link, .card-title-link { display: block; color: inherit; }
 .poster {
@@ -197,6 +202,7 @@ html.is-list { scrollbar-gutter: stable; }
   gap: 12px;
 }
 .player-wrap {
+  --player-max: max(120px, calc(100vh - var(--bar) - 170px)); /* webOS 22 */
   --player-max: max(120px, calc(100dvh - var(--bar) - 170px));
   width: min(100%, calc(var(--player-max) * 16 / 9));
   max-width: 100%;
@@ -214,6 +220,7 @@ html.is-list { scrollbar-gutter: stable; }
   width: var(--ep-rail-w);
   min-width: 0;
   min-height: 0;
+  height: calc(100vh - var(--bar) - 24px); /* webOS 22 */
   height: calc(100dvh - var(--bar) - 24px);
   position: sticky;
   top: calc(var(--bar) + 8px);
@@ -270,6 +277,7 @@ html.is-list { scrollbar-gutter: stable; }
   margin: 0 0 12px;
   padding: 10px 12px;
   background: var(--bg-2);
+  border: 1px solid var(--accent); /* webOS 22 */
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
   border-radius: 10px;
 }
@@ -289,6 +297,7 @@ html.is-list { scrollbar-gutter: stable; }
 }
 .chip.actor {
   font-size: 15px; padding: 8px 14px; color: var(--text);
+  background: var(--bg-2); border-color: var(--accent); /* webOS 22 */
   background: var(--bg-2); border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 button.chip { font: inherit; }
@@ -311,7 +320,9 @@ button.chip { font: inherit; }
 }
 .ep-auto.on {
   color: var(--text);
+  border-color: var(--accent); /* webOS 22 */
   border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: var(--bg-2); /* webOS 22 */
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-2));
 }
 .actions { display: flex; gap: 8px; margin: 12px 0; }
@@ -358,7 +369,8 @@ button.chip { font: inherit; }
   opacity: 0; transition: opacity 0.2s;
   pointer-events: none;
 }
-.player.show .overlay, .player .overlay:has(:focus-visible) { opacity: 1; }
+.player.show .overlay { opacity: 1; }
+.player .overlay:has(:focus-visible) { opacity: 1; }
 .player:not(.show) { cursor: none; }
 .player:not(.show) .controls:not(:has(:focus-visible)) { pointer-events: none; }
 .controls { padding: 10px 16px 14px; pointer-events: auto; }
@@ -388,6 +400,7 @@ button.chip { font: inherit; }
 .seek-knob {
   position: absolute; top: 50%; width: 14px; height: 14px; border-radius: 50%;
   background: #fff; transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 4px rgba(128, 128, 128, 0.22); /* webOS 22 */
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 .seek-tip {
@@ -509,6 +522,7 @@ select.field, .field {
 }
 .theme-swatch.on {
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(128, 128, 128, 0.22); /* webOS 22 */
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 .theme-swatch .bars {
@@ -538,6 +552,9 @@ select.field, .field {
 .tv-mode .poster .dur { font-size: 14px; }
 /* The remote treats the player as one block: a ring shows it is the thing the arrows act on. */
 .tv-mode .player:focus { outline: 3px solid var(--accent); outline-offset: -3px; }
+/* A TV repaints the whole screen on every focus move: no blur behind the bar, a light card shadow. */
+.tv-mode .topbar { backdrop-filter: none; }
+.tv-mode .poster { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); }
 .tv-mode .card:focus, .tv-mode .chip:focus, .tv-mode .more:focus, .tv-mode .nav a:focus, .tv-mode select:focus {
   outline: 3px solid var(--accent);
   outline-offset: 3px;
@@ -573,16 +590,19 @@ select.field, .field {
     flex: none;
     width: 100%;
     height: auto;
+    max-height: min(36vh, 280px); /* webOS 22 */
     max-height: min(36dvh, 280px);
     position: static;
   }
   .ep-rail-list {
     grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
     overflow-y: auto;
+    max-height: min(24vh, 180px); /* webOS 22 */
     max-height: min(24dvh, 180px);
   }
 }
 @media (max-width: 720px) {
+  .player-wrap { --player-max: max(100px, calc(100vh - var(--bar) - 210px)); } /* webOS 22 */
   .player-wrap { --player-max: max(100px, calc(100dvh - var(--bar) - 210px)); }
   .cast-bar { padding: 8px; }
   .cast-actions { gap: 6px; }
@@ -621,6 +641,7 @@ select.field, .field {
 /* Finding videos: loading states, search scope, library */
 .grid.is-busy { opacity: 0.45; pointer-events: none; transition: opacity 0.2s; }
 .card.skeleton .poster, .skeleton-line {
+  background: linear-gradient(90deg, var(--card) 25%, var(--card) 37%, var(--card) 63%); /* webOS 22 */
   background: linear-gradient(90deg, var(--card) 25%, color-mix(in srgb, var(--card) 80%, var(--text)) 37%, var(--card) 63%);
   background-size: 400% 100%;
   animation: skeleton-shine 1.4s ease infinite;

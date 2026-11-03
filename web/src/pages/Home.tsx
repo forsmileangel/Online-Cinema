@@ -122,14 +122,15 @@ export function Home() {
         </p>
       ) : null}
       {data.picks?.length ? <PicksBar picks={data.picks} source={source} /> : null}
-      <PosterRow title="繼續觀看" to={`/history?only=${encodeURIComponent(source)}`} items={data.continue_watching} lines={1} />
-      {data.rows.map((row) => (
+      <PosterRow title="繼續觀看" to={`/history?only=${encodeURIComponent(source)}`} items={data.continue_watching} lines={1} priority />
+      {data.rows.map((row, index) => (
         <PosterRow
           key={`${row.kind}/${row.slug || ""}`}
           title={row.title}
           to={row.more === false ? undefined : withSrc(row.slug ? `/c/${row.kind}/${encodeURIComponent(row.slug)}` : `/c/${row.kind}`, source)}
           items={row.items}
           lines={2}
+          priority={index === 0}
         />
       ))}
     </div>

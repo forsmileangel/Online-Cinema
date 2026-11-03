@@ -9,7 +9,7 @@ import { PosterRow } from "../components/PosterRow";
 import { api } from "../api";
 import { useCasting } from "../hooks/useCasting";
 import { usePlaybackRecovery } from "../hooks/usePlaybackRecovery";
-import { useSource, withSrc } from "../source";
+import { useSource, useZh, withSrc } from "../source";
 import type { Episode, VideoDetail } from "../types";
 
 function looksJp(s: string) {
@@ -81,7 +81,8 @@ function FavUnderFs({ on, onClick }: { on: boolean; onClick: () => void }) {
 }
 
 export function Watch() {
-  const { prefix, zhMap } = useSource();
+  const { prefix } = useSource();
+  const { zhMap } = useZh();
   const { id = "", source: sourceParam } = useParams();
   const [searchParams] = useSearchParams();
   const requestedEpisode = searchParams.get("ep") || undefined;
@@ -447,7 +448,9 @@ export function Watch() {
               <Player key={`${activeEp}:${resolveAttempt}`} onPlaybackStarted={() => {
                 // Lets the player reuse downloaded segments; nothing to show if it fails.
                 void notifyOfflinePlayback(source, id, activeEp).catch(() => undefined);
-              }} onError={playbackError} src={playlist} startAt={startAt} startPaused={retryResume?.episode === activeEp && retryResume.paused} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} episodeControls={episodeControls} nextEpisode={nextEpisode && !cast.active && !cast.busy ? { title: nextEpisode.title, onPlay: () => pickEpisode(nextEpisode.id) } : undefined} />
+              }} onError={playbackError} src={playlist} startAt={startAt} startPaused={retryResume?.episode === activeEp && retryResume.paused} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} episodeControls={episodeControls} nextEpisode={nextEpisode && !cast.active && !cast.busy ? { title: nextEpisode.title, onPlay: () => pickEpisode(nextEpisode.id) } : undefined}
+                onPreviousEpisode={previousEpisode && !cast.active && !cast.busy ? () => pickEpisode(previousEpisode.id) : undefined}
+                media={{ title, episode: currentEp?.title, cover: data.cover }} />
             ) : (
               <div className="player">
                 <div className="empty">{episodeError ? (recovery.pending ? "正在重新連線，稍後從原進度繼續…" : "這一集無法播放") : source === "anigamer" ? `正在準備${currentEp?.title || "這一集"}…` : `載入第${activeEp || ""}集…`}</div>

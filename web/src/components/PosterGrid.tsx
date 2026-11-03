@@ -29,11 +29,12 @@ export function PosterGrid({
   const showSource = new Set(items.map((item) => item.source || "")).size > 1;
   return (
     <div className={`grid${gridShape(items)}${busy ? " is-busy" : ""}`} aria-busy={busy || undefined}>
-      {items.map((item) => (
+      {items.map((item, index) => (
         <PosterCard
           key={`${item.source || ""}:${item.id}`}
           item={item}
           showSource={showSource}
+          priority={index < 12}
           onRemove={onRemove ? () => onRemove(item) : undefined}
           removeLabel={removeLabel}
         />

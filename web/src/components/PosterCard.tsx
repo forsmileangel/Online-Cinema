@@ -1,8 +1,8 @@
-import { useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { memo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import type { Card } from "../types";
-import { isPortrait, useSource } from "../source";
-import { rememberOpened } from "../hooks/useScrollRestore";
+import { isPortrait, useSource, useZh } from "../source";
+import { currentLocationKey, rememberOpened } from "../hooks/useScrollRestore";
 
 const SRC_BADGE: Record<string, string> = {
   anigamer: "巴哈姆特動畫瘋",
@@ -26,15 +26,18 @@ function retriedCoverUrl(cover: string, token: string) {
   }
 }
 
-export function PosterCard({ item, onRemove, removeLabel = "移除", showSource = true }: {
+// Memoised: a list of 1,500 cards must not repaint when a translation batch or the route changes.
+export const PosterCard = memo(function PosterCard({ item, onRemove, removeLabel = "移除", showSource = true, priority = false }: {
   item: Card;
   onRemove?: () => void;
   removeLabel?: string;
   /** Lists from one source leave the source name out. */
   showSource?: boolean;
+  /** Among the first covers on the page: fetched at once, ahead of the rest. */
+  priority?: boolean;
 }) {
-  const { prefix, zhMap } = useSource();
-  const loc = useLocation();
+  const { prefix } = useSource();
+  const { zhMap } = useZh();
   const pct = item.progress && item.progress > 0.02 ? Math.round(item.progress * 100) : 0;
   const orig = item.original_title || item.title;
   const cover = (item.cover || "").trim();
@@ -66,7 +69,7 @@ export function PosterCard({ item, onRemove, removeLabel = "移除", showSource 
     });
   };
   const href = `${prefix}/watch/${encodeURIComponent(item.source || "hongguo")}/${encodeURIComponent(item.id)}`;
-  const opened = () => rememberOpened(loc.key, href);
+  const opened = () => rememberOpened(currentLocationKey(), href);
   return (
     <div className={`card${isPortrait(item.source) ? " portrait" : ""}`}>
       <div className="poster-shell">
@@ -77,7 +80,9 @@ export function PosterCard({ item, onRemove, removeLabel = "移除", showSource 
                 key={`${cover}-${currentCoverState.token}`}
                 src={retriedCoverUrl(cover, currentCoverState.token)}
                 alt=""
-                loading="lazy"
+                loading={priority ? "eager" : "lazy"}
+                fetchPriority={priority ? "high" : "auto"}
+                decoding="async"
                 referrerPolicy="no-referrer"
                 onError={onCoverError}
               />
@@ -127,4 +132,4 @@ export function PosterCard({ item, onRemove, removeLabel = "移除", showSource 
       {showSource && item.source ? <div className="badge-src">{SRC_BADGE[item.source] || item.source}</div> : null}
     </div>
   );
-}
+});

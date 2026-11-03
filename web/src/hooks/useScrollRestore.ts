@@ -14,6 +14,11 @@ export function rememberOpened(key: string, href: string) {
   positions.set(key, window.scrollY);
 }
 
+/** The router's key for the current history entry, without subscribing a component to location changes. */
+export function currentLocationKey(): string {
+  return (window.history.state as { key?: string } | null)?.key ?? "default";
+}
+
 /** Whether the browser still shows this history entry (the router keeps its key in history.state). */
 function isCurrent(key: string) {
   return (window.history.state?.key ?? "default") === key;

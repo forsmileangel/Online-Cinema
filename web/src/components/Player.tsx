@@ -1,7 +1,13 @@
-import Hls from "hls.js";
+import type Hls from "hls.js";
 import { api } from "../api";
 import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import type { CastingController } from "../hooks/useCasting";
+import { useSource } from "../source";
+
+// hls.js is 60% of the bundle: it is fetched the first time an HLS stream plays, not with the home page.
+type HlsModule = typeof import("hls.js");
+let hlsModule: HlsModule | null = null;
+const loadHls = () => (hlsModule ? Promise.resolve(hlsModule) : import("hls.js").then((m) => (hlsModule = m)));
 
 const VOL_KEY = "cinema.volume";
 const QUALITY_KEY = "cinema.quality";
@@ -80,6 +86,8 @@ export function Player({
   onToggleFav,
   episodeControls,
   nextEpisode,
+  onPreviousEpisode,
+  media,
 }: {
   src: string;
   startAt?: number;
@@ -94,8 +102,12 @@ export function Player({
   onToggleFav?: () => void;
   episodeControls?: ReactNode;
   nextEpisode?: { title: string; onPlay: () => void };
+  onPreviousEpisode?: () => void;
+  /** What the lock screen and media keys show and act on. */
+  media?: { title: string; episode?: string; cover?: string };
 }) {
   const casting = !!remote?.active || !!remote?.restoring;
+  const { tv } = useSource();
   const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -116,6 +128,8 @@ export function Player({
   const [hoverTime, setHoverTime] = useState(0);
   const [levels, setLevels] = useState<{ h: number; i: number }[]>([]);
   const [level, setLevel] = useState(-1);
+  // Which engine plays the current stream; the quality menu only makes sense with hls.js.
+  const [engine, setEngine] = useState<"" | "hls" | "native">("");
   const [videoHeight, setVideoHeight] = useState(0);
   const [web720, setWeb720] = useState<{ src: string; url: string } | null>(null);
   const [qualityBusy, setQualityBusy] = useState(false);
@@ -287,16 +301,38 @@ export function Player({
         video.removeAttribute("src");
       };
     }
-    if (Hls.isSupported()) {
+    const nativeHls = !!video.canPlayType("application/vnd.apple.mpegurl");
+    let cancelled = false;
+    const playNative = () => {
+      setEngine("native");
+      video.src = playbackSrc;
+      nativeMetadata = () => {
+        if (start) video.currentTime = start;
+        beginPlayback();
+      };
+      video.addEventListener("loadedmetadata", nativeMetadata, { once: true });
+    };
+    if (typeof MediaSource === "undefined" && nativeHls) {
+      playNative(); // iPhone Safari: no MediaSource, so hls.js is never fetched there.
+    } else void loadHls().then(({ default: Hls }) => {
+      if (cancelled) return;
+      if (!Hls.isSupported()) {
+        if (nativeHls) playNative();
+        else playbackFailed();
+        return;
+      }
+      setEngine("hls");
       hls = new Hls({
         enableWorker: true,
         autoStartLoad: false,
         lowLatencyMode: false,
         startFragPrefetch: true,
         testBandwidth: false,
-        maxBufferLength: 180,
-        maxMaxBufferLength: 600,
-        maxBufferSize: 80 * 1000 * 1000,
+        // Never fetch a rendition larger than the picture; a TV keeps less in memory.
+        capLevelToPlayerSize: true,
+        maxBufferLength: tv ? 60 : 180,
+        maxMaxBufferLength: tv ? 180 : 600,
+        maxBufferSize: (tv ? 40 : 80) * 1000 * 1000,
         backBufferLength: 45,
         abrEwmaDefaultEstimate: 8_000_000,
         fragLoadPolicy: { default: {
@@ -359,15 +395,9 @@ export function Player({
       hlsRef.current = hls;
       hls.loadSource(playbackSrc);
       hls.attachMedia(video);
-    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = playbackSrc;
-      nativeMetadata = () => {
-        if (start) video.currentTime = start;
-        beginPlayback();
-      };
-      video.addEventListener("loadedmetadata", nativeMetadata, { once: true });
-    }
+    });
     return () => {
+      cancelled = true;
       window.clearTimeout(recovery.current.timer);
       if (nativeMetadata) video.removeEventListener("loadedmetadata", nativeMetadata);
       hls?.destroy();
@@ -464,8 +494,9 @@ export function Player({
     };
   }, [onProgress, onEnded]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
+  // The handler reads the latest state through this ref, so the listener is attached once.
+  const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
+  keyHandler.current = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName || "";
       if (["INPUT", "SELECT", "TEXTAREA"].includes(tag)) return;
@@ -517,10 +548,52 @@ export function Player({
       } else if (e.key === "]") {
         changeLevel(-3);
       }
-    };
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => keyHandler.current(e);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  });
+  }, []);
+
+  // Lock screen, earbuds and keyboard media keys: what plays, and play/pause/seek/next from there.
+  useEffect(() => {
+    const session = navigator.mediaSession;
+    if (!session || !media) return;
+    try {
+      session.metadata = new MediaMetadata({ title: media.title, artist: media.episode || "", artwork: media.cover ? [{ src: media.cover }] : [] });
+      session.playbackState = isPaused ? "paused" : "playing";
+    } catch {
+      return;
+    }
+    const handlers: [MediaSessionAction, MediaSessionActionHandler | null][] = [
+      ["play", () => { if (isPaused) togglePlay(); }],
+      ["pause", () => { if (!isPaused) togglePlay(); }],
+      ["seekbackward", (d) => seekBy(-(d.seekOffset || 10))],
+      ["seekforward", (d) => seekBy(d.seekOffset || 10)],
+      ["nexttrack", nextEpisode ? () => nextEpisode.onPlay() : null],
+      ["previoustrack", onPreviousEpisode ? () => onPreviousEpisode() : null],
+    ];
+    for (const [action, handler] of handlers) {
+      try { session.setActionHandler(action, handler); } catch { /* an action this browser does not know */ }
+    }
+    return () => {
+      for (const [action] of handlers) {
+        try { session.setActionHandler(action, null); } catch { /* ignore */ }
+      }
+      session.metadata = null;
+    };
+    // togglePlay/seekBy read refs; the deps are what changes the metadata or the available actions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [media?.title, media?.episode, media?.cover, isPaused, !!nextEpisode, !!onPreviousEpisode, casting]);
+
+  // Picture-in-picture where the browser offers it; pointless on a TV or while the TV plays.
+  const pipAvailable = typeof document !== "undefined" && !!document.pictureInPictureEnabled && !casting && !tv;
+  function togglePip() {
+    const video = videoRef.current;
+    if (!video || video.disablePictureInPicture) return;
+    if (document.pictureInPictureElement) void document.exitPictureInPicture().catch(() => undefined);
+    else void video.requestPictureInPicture().then(() => undefined, () => setNotice("這個瀏覽器無法開啟子母畫面"));
+  }
 
   function ratioFromEvent(e: PointerEvent) {
     const el = barRef.current;
@@ -952,7 +1025,7 @@ export function Player({
             >
               {RATES.map((r) => <option key={r} value={r}>{r === 1 ? "1x" : `${r}x`}</option>)}
             </select> : null}
-            {casting ? <span className="quality-status" aria-label="投放畫質" title="投放端處理畫質；本機畫質選單只適用於本機播放">{castQuality}</span> : !isMp4 && Hls.isSupported() ? <select
+            {casting ? <span className="quality-status" aria-label="投放畫質" title="投放端處理畫質；本機畫質選單只適用於本機播放">{castQuality}</span> : !isMp4 && engine === "hls" ? <select
               className="field"
               aria-label="播放畫質"
               title="記住畫質供下次播放使用；720p 轉換需要電腦處理，部分片源不支援"
@@ -969,6 +1042,11 @@ export function Player({
               <button type="button" onClick={(e) => { e.stopPropagation(); toggleFs(); }}>
                 <span className="lbl">全螢幕</span><span className="ico" aria-hidden>⛶</span>
               </button>
+              {pipAvailable ? (
+                <button type="button" aria-label="子母畫面" title="子母畫面" onClick={(e) => { e.stopPropagation(); togglePip(); }}>
+                  <span className="lbl">子母畫面</span><span className="ico" aria-hidden>⧉</span>
+                </button>
+              ) : null}
               {onToggleFav ? (
                 <button
                   type="button"

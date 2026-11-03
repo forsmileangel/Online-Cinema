@@ -32,8 +32,10 @@ $health = "http://127.0.0.1:$port/api/health"
 $python = if (Test-Path -LiteralPath '.venv/Scripts/python.exe') { '.venv/Scripts/python.exe' } else { 'python' }
 
 function Step([string]$Text) { Write-Host ("`n== {0}" -f $Text) -ForegroundColor Cyan }
-function Get-Health {
-    try { return Invoke-RestMethod -Uri $health -TimeoutSec 5 } catch { return $null }
+function Get-Health([switch]$Fresh) {
+    # ?fresh=1 counts the downloads now; the plain check returns the last count (up to 15 s old).
+    $url = if ($Fresh) { $health + '?fresh=1' } else { $health }
+    try { return Invoke-RestMethod -Uri $url -TimeoutSec 30 } catch { return $null }
 }
 
 Step 'Working tree'
@@ -61,7 +63,7 @@ if (-not $SkipTests) {
 Step 'Waiting for the server to be idle'
 $deadline = (Get-Date).AddMinutes($BusyWaitMinutes)
 while ($true) {
-    $state = Get-Health
+    $state = Get-Health -Fresh
     if ($null -eq $state) { Write-Host 'server not answering; deploying anyway'; break }
     $casts = [int]$state.busy.casts; $jobs = [int]$state.busy.offline_jobs
     if (($casts -eq 0 -and $jobs -eq 0) -or $Force) { break }

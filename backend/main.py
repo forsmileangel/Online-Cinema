@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.concurrency import run_in_threadpool
 
 from . import catalog
 from . import cast as chromecast
@@ -90,6 +91,9 @@ class AccessGuard(BaseHTTPMiddleware):
 async def lifespan(_app: FastAPI):
     host_guard.refresh()  # This PC's names, before any request is judged by them.
     offline._start_maintenance()
+    # The health check runs on the event loop: the commit is read and the downloads counted before it is asked.
+    await run_in_threadpool(_version)
+    offline.active_count()
     yield
 
 
@@ -170,9 +174,10 @@ def _version() -> str:
     return _version_cache
 
 
-def busy_state() -> dict:
-    """What a restart would interrupt: TVs being played to and downloads under way."""
-    return {"casts": cast_session.active_count(), "offline_jobs": offline.active_count()}
+async def busy_state(fresh: bool = False) -> dict:
+    """What a restart would interrupt: TVs being played to and downloads under way (fresh: counted now)."""
+    jobs = await run_in_threadpool(offline.active_count, True) if fresh else offline.active_count()
+    return {"casts": cast_session.active_count(), "offline_jobs": jobs}
 
 
 @app.get("/api/offline")
@@ -243,8 +248,10 @@ def offline_media(key: str, request: Request):
 
 
 @app.get("/api/health")
-def health():
-    return {"ok": True, "version": _version(), "busy": busy_state()}
+async def health(fresh: bool = False):
+    # A liveness check answered on the event loop from what is already known: a busy disk or a full thread
+    # pool must never make a healthy server look hung to the supervisor. deploy.ps1 asks with ?fresh=1.
+    return {"ok": True, "version": _version(), "busy": await busy_state(fresh)}
 
 
 def _src(source: str | None) -> str:

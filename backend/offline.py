@@ -175,8 +175,13 @@ def listing(sources, source=None, video_id=None):
 ACTIVE = frozenset({'queued', 'preparing', 'downloading', 'retrying', 'cancelling', 'deleting'})
 
 
-def active_count() -> int:
-    """Jobs a restart would interrupt (they resume afterwards, but the restart is better timed around them)."""
+ACTIVE_COUNT_TTL = 15.0
+_active_lock = threading.Lock()
+_active_known = None  # (monotonic time, count) of the last count
+_active_counting = False
+
+
+def _count_active():
     count = 0
     if ROOT.exists():
         for path in ROOT.iterdir():
@@ -189,6 +194,36 @@ def active_count() -> int:
             if item and item.get('phase') in ACTIVE:
                 count += 1
     return count
+
+
+def _recount():
+    global _active_known, _active_counting
+    try:
+        count = _count_active()
+        with _active_lock:
+            _active_known = (time.monotonic(), count)
+        return count
+    finally:
+        with _active_lock:
+            _active_counting = False
+
+
+def active_count(fresh=False):
+    """Jobs a restart would interrupt (they resume afterwards, but the restart is better timed around them).
+
+    Counting reads every job folder: 40 ms on an idle disk, seconds while downloads, transcodes and the
+    other cinema read the same folder. The health check must answer at once, so it gets the last count
+    (at most 15 s old, recounted in the background; 0 until the first count is in). ``fresh`` counts now.
+    """
+    global _active_counting
+    with _active_lock:
+        known = _active_known
+        if not fresh:
+            if (known is None or time.monotonic() - known[0] >= ACTIVE_COUNT_TTL) and not _active_counting:
+                _active_counting = True
+                threading.Thread(target=_recount, name='offline-active-count', daemon=True).start()
+            return known[1] if known else 0
+    return _recount()
 
 
 def local_detail(source, video_id, episode=None):

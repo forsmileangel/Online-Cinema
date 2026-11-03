@@ -37,7 +37,7 @@ function Get-Health {
 }
 
 Step 'Working tree'
-$dirty = git status --porcelain
+$dirty = git status --porcelain --untracked-files=no
 if ($dirty -and -not $AllowDirty) { throw "Uncommitted changes:`n$($dirty -join "`n")`nCommit them, or pass -AllowDirty." }
 $version = (git rev-parse --short HEAD).Trim()
 Write-Host "deploying $version to $task (port $port)"

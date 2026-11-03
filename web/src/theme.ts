@@ -358,11 +358,29 @@ export function presetById(id: string): ThemePreset {
   return PRESETS.find((p) => p.id === id) || PRESETS[0];
 }
 
+function luminance(hex: string) {
+  const m = /^#([0-9a-f]{6})/i.exec(hex.trim());
+  if (!m) return 0;
+  const [r, g, b] = [0, 2, 4].map((i) => {
+    const c = parseInt(m[1].slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** Text colour for a button painted with this accent: white or near-black, whichever has the higher contrast. */
+export function onAccent(accent: string) {
+  const l = luminance(accent);
+  return (1.05) / (l + 0.05) >= (l + 0.05) / 0.0556 ? "#ffffff" : "#111111";
+}
+
 export function applyTokens(tokens: ThemeTokens, light = false) {
   const root = document.documentElement;
   (Object.keys(CSS_MAP) as (keyof ThemeTokens)[]).forEach((k) => {
     root.style.setProperty(CSS_MAP[k], tokens[k]);
   });
+  root.style.setProperty("--on-accent", onAccent(tokens.accent));
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", tokens.bg);
   root.style.setProperty("color-scheme", light ? "light" : "dark");
   root.setAttribute("data-theme", light ? "light" : "dark");
 }

@@ -76,7 +76,7 @@
 .dl-cleanup p { margin: 6px 0; }
 .dl-toolbar {
   position: sticky;
-  top: 0;
+  top: calc(var(--bar) + env(safe-area-inset-top, 0px));
   z-index: 2;
   display: flex;
   flex-wrap: wrap;

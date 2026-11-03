@@ -76,8 +76,8 @@ export function TopBar() {
         </datalist>
       </form>
       <label className="src-select">
-        <span className="hide-sm">來源</span>
-        <select className="field" value={pageSource} onChange={(e) => pickSource(e.target.value)}>
+        <span className="hide-sm" aria-hidden>來源</span>
+        <select className="field" aria-label="來源" value={pageSource} onChange={(e) => pickSource(e.target.value)}>
           {groups.map(([group, list]) =>
             group ? (
               <optgroup key={group} label={group}>

@@ -796,12 +796,26 @@ def index():
     return HTMLResponse("介面尚未建置。請用 start.bat 啟動（會自動 npm run build）。", status_code=503)
 
 
+@app.get("/favicon.ico")
+def favicon():
+    # Browsers ask for this by habit; the SVG answers it (they go by content type, not the name).
+    icon = DIST / "favicon.svg"
+    if icon.is_file():
+        return FileResponse(icon, media_type="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
+    raise HTTPException(404)
+
+
 @app.get("/{full_path:path}")
 def spa(full_path: str):
     if full_path.startswith("api/") or full_path.startswith("api"):
         raise HTTPException(404)
     if ".." in full_path or full_path.startswith("\\"):
         raise HTTPException(400)
+    # Icons and the manifest live in the build root next to index.html.
+    if full_path and "/" not in full_path:
+        asset = (DIST / full_path).resolve()
+        if asset.is_file() and asset.parent == DIST.resolve() and asset.name != "index.html":
+            return FileResponse(asset, headers={"Cache-Control": "public, max-age=86400"})
     index_file = DIST / "index.html"
     if index_file.is_file():
         return FileResponse(index_file)

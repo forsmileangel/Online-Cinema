@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { api } from "./api";
+import { APP, storageKey } from "./appConfig";
 import type { SourceInfo } from "./types";
 
 type Src = SourceInfo;
@@ -24,21 +25,10 @@ type ZhCtx = {
 
 const ZhContext = createContext<ZhCtx>({ zhMap: {}, queueZh: () => {} });
 
-// Shown until /api/settings answers; the server list is the source of truth.
-const DEFAULT_SOURCES: Src[] = [
-  { id: "mvffm", label: "MVFFM 電影線上看", group: "影劇" },
-  { id: "chinaq", label: "中國人線上看", group: "影劇" },
-  { id: "gimy", label: "Gimy 劇迷", group: "影劇" },
-  { id: "mmov", label: "MMOV 電影線上看", group: "影劇" },
-  { id: "dramaq", label: "DramaQ", group: "影劇" },
-  { id: "hongguo", label: "紅果短劇", group: "短劇" },
-  { id: "anigamer", label: "巴哈姆特動畫瘋", group: "動畫" },
-];
-
 const SourceCtx = createContext<Ctx>({
-  source: "hongguo",
+  source: APP.defaultSource,
   setSource: () => {},
-  sources: DEFAULT_SOURCES,
+  sources: APP.fallbackSources,
   prefix: "",
   tv: false,
   showOriginal: false,
@@ -49,17 +39,17 @@ export function SourceProvider({ children }: { children: ReactNode }) {
   const loc = useLocation();
   const tv = loc.pathname === "/tv" || loc.pathname.startsWith("/tv/");
   const prefix = tv ? "/tv" : "";
-  const [sources, setSources] = useState<Src[]>(DEFAULT_SOURCES);
+  const [sources, setSources] = useState<Src[]>(APP.fallbackSources);
   const [source, setSourceState] = useState(() => {
     try {
-      return localStorage.getItem("cinema.source") || "hongguo";
+      return localStorage.getItem(storageKey("source")) || APP.defaultSource;
     } catch {
-      return "hongguo";
+      return APP.defaultSource;
     }
   });
   const [showOriginal, setShowOriginalState] = useState(() => {
     try {
-      return localStorage.getItem("cinema.showOriginal") === "1";
+      return localStorage.getItem(storageKey("showOriginal")) === "1";
     } catch {
       return false;
     }
@@ -68,7 +58,7 @@ export function SourceProvider({ children }: { children: ReactNode }) {
   const setShowOriginal = useCallback((v: boolean) => {
     setShowOriginalState(v);
     try {
-      localStorage.setItem("cinema.showOriginal", v ? "1" : "0");
+      localStorage.setItem(storageKey("showOriginal"), v ? "1" : "0");
     } catch {
       /* ignore */
     }
@@ -117,10 +107,10 @@ export function SourceProvider({ children }: { children: ReactNode }) {
 
   const setSource = useCallback((s: string) => {
     const ids = sources.map((x) => x.id);
-    const v = ids.includes(s) ? s : "hongguo";
+    const v = ids.includes(s) ? s : APP.defaultSource;
     setSourceState(v);
     try {
-      localStorage.setItem("cinema.source", v);
+      localStorage.setItem(storageKey("source"), v);
     } catch {
       /* ignore */
     }
@@ -136,7 +126,7 @@ export function SourceProvider({ children }: { children: ReactNode }) {
         if (s.source && (ids.length === 0 || ids.includes(s.source))) {
           setSourceState(s.source);
           try {
-            localStorage.setItem("cinema.source", s.source);
+            localStorage.setItem(storageKey("source"), s.source);
           } catch {
             /* ignore */
           }

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { NavLink, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { loadRecent, loadScope, parseScope, rememberSearch, searchPath } from "../searchPrefs";
+import { APP } from "../appConfig";
 import { searchHint, sourceGroup, usePageSource, useSource } from "../source";
 import type { SourceInfo } from "../types";
 
@@ -12,7 +13,7 @@ export function TopBar() {
   const [q, setQ] = useState(urlQ);
   const [recent, setRecent] = useState(loadRecent);
   const nav = useNavigate();
-  const { setSource, sources, prefix, tv } = useSource();
+  const { source, setSource, sources, prefix, tv, showOriginal, setShowOriginal } = useSource();
   const pageSource = usePageSource();
 
   // The box shows what the current results are for, also after Back/Forward.
@@ -51,7 +52,7 @@ export function TopBar() {
     <header className="topbar">
       <NavLink to={prefix || "/"} className="brand">
         <span className="brand-mark" />
-        線上電影院
+        {APP.name}
       </NavLink>
       <form className="search" role="search" onSubmit={onSearch}>
         <input
@@ -90,12 +91,24 @@ export function TopBar() {
         </select>
       </label>
       <nav className="nav">
+        {APP.translateSource && pageSource === APP.translateSource ? (
+          <button
+            type="button"
+            className="ghost"
+            data-tv="1"
+            onClick={() => setShowOriginal(!showOriginal)}
+          >
+            {showOriginal ? "顯示譯文" : "顯示原文"}
+          </button>
+        ) : null}
         <NavLink to={`${prefix}/`} end>
           首頁
         </NavLink>
-        <NavLink to={`${prefix}/#picks`} className="hide-sm">
-          選片
-        </NavLink>
+        {!APP.noPicks.includes(source) ? (
+          <NavLink to={`${prefix}/#picks`} className="hide-sm">
+            選片
+          </NavLink>
+        ) : null}
         <NavLink to={`${prefix}/offline`}>離線影片</NavLink>
         <NavLink to={`${prefix}/favorites`} className={() => (/\/(favorites|history)$/.test(loc.pathname) ? "active" : "")}>
           收藏

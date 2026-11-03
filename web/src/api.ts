@@ -1,4 +1,12 @@
+import { APP } from "./appConfig";
 import type { Alternative, Card, HistoryItem, HomePayload, Listing, MultiResult, Settings, VideoDetail } from "./types";
+
+export type IninavStatus = { logged_in: boolean; email: string };
+export type ConnectionInfo = {
+  enabled: boolean;
+  port: number;
+  addresses: { ip: string; url: string; connect_url: string; listening: boolean }[];
+};
 
 export type CastStatus = {
   uuid: string;
@@ -18,11 +26,6 @@ export type CastStatus = {
 };
 
 export type CastDevice = { uuid: string; name: string; host: string; kind: string; online: boolean; mac: string; can_wake: boolean; model?: string; location?: string; manual_power_on?: boolean };
-export type ConnectionInfo = {
-  enabled: boolean;
-  port: number;
-  addresses: { ip: string; url: string; connect_url: string; listening: boolean }[];
-};
 export type CastSession = CastStatus & {
   session_id: string; phase: string; error: string; pending_action: string;
   source: string; video_id: string; episode_id: string; autoplay_next: boolean; playlist: string;
@@ -116,7 +119,8 @@ async function list<T>(path: string, signal?: AbortSignal, timeoutMs = LIST_TIME
   return data;
 }
 
-const slowList = (source?: string) => (source === "chinaq" || source === "dramaq" ? 35000 : undefined);
+const slowHome = (source?: string) => (APP.slowHome === null || APP.slowHome.includes(source || "") ? 35000 : undefined);
+const slowList = (source?: string) => (APP.slowList.includes(source || "") ? 35000 : undefined);
 const homePath = (source?: string) => withSource("/api/home", source);
 const browsePath = (kind: string, slug: string | undefined, page: number, source?: string, sort?: string) =>
   withSource(
@@ -158,9 +162,9 @@ export const api = {
     const upstream = new URL(src, window.location.origin).searchParams.get("u") || "";
     return req<{ url: string }>(`/api/playback/720p?u=${encodeURIComponent(upstream)}`, { signal }, 30000);
   },
-  health: () => req<{ ok: boolean }>("/api/health"),
+  health: () => req<{ ok: boolean; mirror?: string }>("/api/health"),
   home: (source?: string, signal?: AbortSignal) =>
-    list<HomePayload>(homePath(source), signal, 35000),
+    list<HomePayload>(homePath(source), signal, slowHome(source)),
   peekHome: (source?: string) => peek<HomePayload>(homePath(source)),
   browse: (kind: string, slug?: string, page = 1, source?: string, signal?: AbortSignal, sort?: string) =>
     list<Listing>(browsePath(kind, slug, page, source, sort), signal, slowList(source)),
@@ -178,7 +182,7 @@ export const api = {
     req<{ items: Alternative[] }>(`/api/alternatives?${new URLSearchParams({ source, video_id: id, title: title.slice(0, 200) })}`, undefined, 40000),
   removeHistory: (id: string, source: string) =>
     req(withSource(`/api/history/${encodeURIComponent(id)}`, source), { method: "DELETE" }),
-  video: async (id: string, source = "hongguo", signal?: AbortSignal, ep?: string) => {
+  video: async (id: string, source = APP.defaultSource, signal?: AbortSignal, ep?: string) => {
     // The 動畫瘋 preparation (and hls.js behind it) is only fetched when one is played.
     if (source === "anigamer") await (await import("./anigamer")).prepareAnigamer(id, ep, signal);
     const q = ep ? `?ep=${encodeURIComponent(ep)}` : "";
@@ -187,7 +191,7 @@ export const api = {
   favorites: () => req<{ items: Card[] }>("/api/favorites"),
   addFavorite: (card: Card) =>
     req("/api/favorites", { method: "POST", body: JSON.stringify(card) }),
-  removeFavorite: (id: string, source = "hongguo") =>
+  removeFavorite: (id: string, source = APP.defaultSource) =>
     req(withSource(`/api/favorites/${encodeURIComponent(id)}`, source), { method: "DELETE" }),
   saveHistory: (body: {
     id: string;
@@ -199,9 +203,15 @@ export const api = {
     episode_id?: string;
   }, keepalive = false) => req("/api/history", { method: "PUT", body: JSON.stringify(body), keepalive }),
   clearHistory: () => req("/api/history", { method: "DELETE" }),
-  settings: () => req<Settings>("/api/settings"),
+  ininavStatus: () => req<IninavStatus>("/api/ininav/status"),
+  ininavLogin: (email: string, password: string) =>
+    req<IninavStatus>("/api/ininav/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  ininavLogout: () => req<IninavStatus>("/api/ininav/logout", { method: "POST" }),
   connection: (signal?: AbortSignal) => req<ConnectionInfo>("/api/connection", { signal, cache: "no-store" }, 10000),
+  settings: () => req<Settings>("/api/settings"),
   saveSettings: (body: {
+    forced_mirror?: string;
+    locale?: string;
     source?: string;
     theme?: string;
     lan_tv?: boolean;
@@ -212,7 +222,7 @@ export const api = {
     req<{ ok: boolean }>("/api/tv/pair", { method: "POST", body: JSON.stringify({ code }) }),
   tvRotate: () => req<{ tv_code: string }>("/api/tv/rotate", { method: "POST" }),
   castDevices: (signal?: AbortSignal) =>
-    req<{ devices: CastDevice[]; selected: string; origin: string; in_kaohsiung: boolean }>(
+    req<{ devices: CastDevice[]; selected: string; origin: string; in_kaohsiung?: boolean }>(
       "/api/cast/devices",
       { signal }, 45000,
     ),
@@ -230,6 +240,7 @@ export const api = {
     req<CastStatus>("/api/cast/control", { method: "POST", body: JSON.stringify({ action, position_sec, uuid, content_id }), signal }, 45000),
   castStatus: (uuid: string, signal?: AbortSignal) =>
     req<CastStatus>(`/api/cast/status?uuid=${encodeURIComponent(uuid)}`, { signal }, 15000),
+  refreshMirrors: () => req<{ mirror: string }>("/api/mirrors/refresh", { method: "POST" }),
   translate: (body: { title: string; description: string; names?: string[] }) =>
     req<{ title: string; description: string; names: string[] }>("/api/translate", {
       method: "POST",

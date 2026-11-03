@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { api, type ConnectionInfo } from "../api";
+import { APP } from "../appConfig";
 
 export function PhoneConnection({ enabled, code }: { enabled?: boolean; code?: string }) {
   const [info, setInfo] = useState<ConnectionInfo | null>(null);
@@ -66,7 +67,7 @@ export function PhoneConnection({ enabled, code }: { enabled?: boolean; code?: s
         : !info.addresses.length ? <p role="status">尚未偵測到區網 IP。請讓電腦連上 Wi-Fi 或有線網路。</p>
         : <>
           <p>連接埠（Port）：<strong>{info.port}</strong></p>
-          {!info.addresses.some((a) => a.listening) ? <p role="status">已允許區網，但服務尚未在目前區網位址回應。若剛開啟此設定，請重啟「Online Cinema Server」或 start.bat。</p> : null}
+          {!info.addresses.some((a) => a.listening) ? <p role="status">已允許區網，但服務尚未在目前區網位址回應。若剛開啟此設定，請重啟「{APP.task}」或 start.bat。</p> : null}
           {info.addresses.length > 1 ? <p className="muted">偵測到多個區網位址，請使用與手機同一個網路的位址。</p> : null}
           {info.addresses.map((address) => <div className="phone-address" key={address.ip}>
             <div className="phone-address-head">

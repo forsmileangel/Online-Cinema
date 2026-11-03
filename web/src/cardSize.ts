@@ -2,7 +2,9 @@
 // styles.css turns it into the --card-* sizes. TV mode always uses its own big cards.
 export type CardSize = "s" | "m" | "l";
 
-const STORAGE = "cinema.cardSize";
+import { storageKey } from "./appConfig";
+
+const STORAGE = storageKey("cardSize");
 
 export const CARD_SIZES: { id: CardSize; label: string }[] = [
   { id: "s", label: "小" },

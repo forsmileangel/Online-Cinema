@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { APP } from "../appConfig";
 import { Link, useSearchParams } from "react-router-dom";
 import { ListingMore } from "../components/ListingMore";
 import { MultiSearch } from "../components/MultiSearch";
@@ -153,7 +154,7 @@ function RecentSearches({ src }: { src: string }) {
   const [recent, setRecent] = useState(loadRecent);
   return (
     <div>
-      <div className="empty">輸入劇名或關鍵字開始搜尋。</div>
+      <div className="empty">{APP.searchEmpty}</div>
       {recent.length ? (
         <section className="picks">
           <div className="picks-title">最近搜尋</div>

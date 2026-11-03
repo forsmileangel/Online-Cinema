@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import type { CastSession } from "../api";
+import { APP } from "../appConfig";
 import type { CastingController } from "../hooks/useCasting";
 
 /** "電腦已預先緩衝 2 分 40 秒 · 1080p" */
@@ -22,17 +23,17 @@ export function CastBar({ controller, currentEpisode, currentTitle }: { controll
   useEffect(() => setMac(device?.mac || ""), [device?.uuid, device?.mac]);
   return (
     <div className="cast-bar" aria-label="電視投放控制">
-      <p><label><input type="checkbox" checked={controller.inKaohsiung} disabled={busy || !!active}
+      {APP.features.kaohsiung ? <p><label><input type="checkbox" checked={controller.inKaohsiung} disabled={busy || !!active}
         onChange={(e) => void controller.setInKaohsiung(e.target.checked)} /> 我在高雄</label>
-        <span className="muted"> · 勾選後顯示高雄 Philips 電視</span></p>
+        <span className="muted"> · 勾選後顯示高雄 Philips 電視</span></p> : null}
       <div className="cast-actions">
         <button className="btn" type="button" disabled={busy || !controller.canPlay || !device || (device.online === false && device.kind !== "chromecast")} onClick={() => void play()}>
           {busy ? "處理中…" : active ? "重新投放" : "投放到電視"}
         </button>
         {device?.online === false && device.kind === "dlna" && !device.manual_power_on ? <button className="btn" disabled={busy || !controller.canPlay || !device.can_wake} onClick={() => void play(true)}>嘗試喚醒並投放</button> : null}
         <select className="field cast-target" aria-label="投放電視" value={selected} disabled={busy || !!active} onChange={(e) => setSelected(e.target.value)}>
-          {!devices.some((d) => d.uuid === selected) ? <option value={selected}>{selected ? "已選電視離線" : "選擇電視"}</option> : null}
-          {devices.map((d) => <option key={d.uuid} value={d.uuid}>{d.location === "kaohsiung" ? "高雄 · " : ""}{d.name}{d.online === false ? "（離線）" : ""} · {d.kind === "dlna" ? "DLNA" : "Chromecast"}</option>)}
+          {!devices.some((d) => d.uuid === selected) ? <option value={selected}>{selected ? "已選電視離線" : APP.cast.pick}</option> : null}
+          {devices.map((d) => <option key={d.uuid} value={d.uuid}>{d.location === "kaohsiung" ? "高雄 · " : ""}{d.name}{d.online === false ? "（離線）" : ""} · {d.kind === "dlna" ? APP.cast.dlna : "Chromecast"}</option>)}
         </select>
         <button className="btn alt" type="button" disabled={busy} onClick={() => void scan()}>掃描電視</button>
         {active ? <>

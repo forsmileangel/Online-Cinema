@@ -80,10 +80,15 @@ export type MultiResult = { source: string; ok: boolean; listing?: Listing; erro
 export type Alternative = { source: string; label: string; id: string; title: string; count: number; episodes: [number, string][] };
 
 export type Settings = {
+  /** MissAV mirrors and listing language (深夜電影院 only). */
+  mirror?: string;
+  forced_mirror?: string;
+  locale?: string;
+  mirrors?: string[];
+  in_kaohsiung?: boolean;
   source?: string;
   theme?: string;
   lan_tv?: boolean;
-  in_kaohsiung?: boolean;
   lan_ips?: string[];
   tv_code?: string;
   tv_url?: string;

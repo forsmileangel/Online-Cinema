@@ -1,12 +1,27 @@
-import { memo, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Card } from "../types";
+import { APP } from "../appConfig";
 import { isPortrait, useSource, useZh } from "../source";
 import { currentLocationKey, rememberOpened } from "../hooks/useScrollRestore";
 
 const SRC_BADGE: Record<string, string> = {
   anigamer: "巴哈姆特動畫瘋",
+  missav: "MissAV",
+  jable: "Jable",
+  pornhub: "Pornhub",
+  netflav: "Netflav",
+  huangguo: "黃果短劇",
+  huangguo2: "黃果短劇2",
   hongguo: "紅果短劇",
+  avple: "AVPLE",
+  javday: "JAVDAY",
+  ininav: "ininAV",
+  duanju51: "51短劇",
+  "5lxtv": "5lxtv 短劇",
+  "5lxtv-av": "5lxtv 影片",
+  "91md": "91麻豆",
+  "123av": "123AV",
   chinaq: "中國人線上看",
   gimy: "Gimy 劇迷",
   mmov: "MMOV 電影線上看",
@@ -18,7 +33,7 @@ function retriedCoverUrl(cover: string, token: string) {
   if (!token) return cover;
   try {
     const url = new URL(cover, window.location.href);
-    if (url.origin !== window.location.origin || url.pathname !== "/api/img") return cover;
+    if (url.origin !== window.location.origin || (url.pathname !== "/api/img" && !url.pathname.startsWith("/api/img/"))) return cover;
     url.searchParams.set("retry", token);
     return `${url.pathname}${url.search}`;
   } catch {
@@ -36,8 +51,8 @@ export const PosterCard = memo(function PosterCard({ item, onRemove, removeLabel
   /** Among the first covers on the page: fetched at once, ahead of the rest. */
   priority?: boolean;
 }) {
-  const { prefix } = useSource();
-  const { zhMap } = useZh();
+  const { prefix, source, showOriginal } = useSource();
+  const { zhMap, queueZh } = useZh();
   const pct = item.progress && item.progress > 0.02 ? Math.round(item.progress * 100) : 0;
   const orig = item.original_title || item.title;
   const cover = (item.cover || "").trim();
@@ -46,7 +61,10 @@ export const PosterCard = memo(function PosterCard({ item, onRemove, removeLabel
   const currentCoverState = coverState.cover === cover
     ? coverState
     : { cover, attempts: 0, failed: false, token: "" };
-  const label = zhMap[orig] || orig;
+  useEffect(() => {
+    if (APP.translateSource && (item.source || source) === APP.translateSource && !showOriginal && orig) queueZh(orig);
+  }, [orig, showOriginal, queueZh, item.source, source]);
+  const label = showOriginal ? orig : zhMap[orig] || orig;
   const retryToken = () => `${Date.now()}-${++retrySequence.current}`;
   const onCoverError = () => {
     const token = retryToken();
@@ -68,7 +86,7 @@ export const PosterCard = memo(function PosterCard({ item, onRemove, removeLabel
       return { ...current, attempts: current.attempts + 1, failed: false, token };
     });
   };
-  const href = `${prefix}/watch/${encodeURIComponent(item.source || "hongguo")}/${encodeURIComponent(item.id)}`;
+  const href = `${prefix}/watch/${encodeURIComponent(item.source || APP.defaultSource)}/${encodeURIComponent(item.id)}`;
   const opened = () => rememberOpened(currentLocationKey(), href);
   return (
     <div className={`card${isPortrait(item.source) ? " portrait" : ""}`}>

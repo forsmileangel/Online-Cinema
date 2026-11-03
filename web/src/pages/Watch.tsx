@@ -9,6 +9,7 @@ import { PosterRow } from "../components/PosterRow";
 import { api } from "../api";
 import { useCasting } from "../hooks/useCasting";
 import { usePlaybackRecovery } from "../hooks/usePlaybackRecovery";
+import { APP, storageKey } from "../appConfig";
 import { useSource, useZh, withSrc } from "../source";
 import type { Episode, VideoDetail } from "../types";
 
@@ -36,10 +37,10 @@ function epLabel(title: string) {
 }
 
 function epKey(source: string, id: string) {
-  return `cinema.ep.${source}.${id}`;
+  return storageKey(`ep.${source}.${id}`);
 }
 
-const AUTO_KEY = "cinema.autoplay.next";
+const AUTO_KEY = storageKey("autoplay.next");
 
 function loadAutoplay() {
   try {
@@ -81,15 +82,17 @@ function FavUnderFs({ on, onClick }: { on: boolean; onClick: () => void }) {
 }
 
 export function Watch() {
-  const { prefix } = useSource();
-  const { zhMap } = useZh();
+  const { prefix, showOriginal } = useSource();
+  const { zhMap, queueZh } = useZh();
   const { id = "", source: sourceParam } = useParams();
   const [searchParams] = useSearchParams();
   const requestedEpisode = searchParams.get("ep") || undefined;
-  const source = sourceParam && sourceParam !== "watch" ? sourceParam : "hongguo";
+  const source = sourceParam && sourceParam !== "watch" ? sourceParam : APP.defaultSource;
+  // A source whose listings are English: titles come from the batch translation, with a toggle.
+  const translated = !!APP.translateSource && source === APP.translateSource;
   const [data, setData] = useState<VideoDetail | null>(null);
-  const [loadAttempt, setLoadAttempt] = useState(0);
   const [err, setErr] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [zhTitle, setZhTitle] = useState("");
   const [zhDesc, setZhDesc] = useState("");
   const [zhNames, setZhNames] = useState<string[]>([]);
@@ -145,7 +148,7 @@ export function Watch() {
   useEffect(() => {
     if (!data) return;
     const blob = `${data.title} ${data.original_title || ""} ${data.description || ""}`;
-    const auto = data.needs_translate || looksJp(blob);
+    const auto = translated || data.needs_translate || looksJp(blob);
     if (!auto) return;
     const names = [
       ...data.actresses.map((t) => t.name),
@@ -154,6 +157,7 @@ export function Watch() {
     ];
     setTranslating(true);
     const origTitle = data.original_title || data.title;
+    if (translated) queueZh(origTitle);
     api
       .translate({
         title: origTitle,
@@ -271,7 +275,7 @@ export function Watch() {
     };
   }, [id, source]);
 
-  const origMode = showOrig;
+  const origMode = translated ? showOriginal : showOrig;
   const origTitle = data?.original_title || data?.title || "";
   const hasZh = Boolean(zhTitle || zhDesc || zhNames.some((n) => n) || zhMap[origTitle]);
   const title = origMode ? origTitle : zhTitle || zhMap[origTitle] || origTitle;
@@ -357,8 +361,8 @@ export function Watch() {
     if (cast.active) { void cast.episode(nextId); return; }
     flush(); // The episode being left keeps its position.
     recovery.stop();
-    setEpisodeError("");
     setRetryResume(null);
+    setEpisodeError("");
     endLock.current = "";
     setEpId(nextId);
     setEpTouched(true);
@@ -415,6 +419,10 @@ export function Watch() {
       <p>無法載入影片：{err}</p>
       <div className="actions">
         <button className="btn" type="button" data-tv="1" onClick={() => setLoadAttempt(n => n + 1)}>重新載入</button>
+        {/* Members-only ininAV videos: the account is managed on this computer's settings page. */}
+        {APP.features.ininav && source === "ininav" && !prefix && err.includes("「設定」") && (
+          <Link className="btn alt" data-tv="1" to="/settings">前往設定登入</Link>
+        )}
         <Link className="btn alt" data-tv="1" to={prefix || "/"}>返回首頁</Link>
       </div>
     </div>
@@ -450,7 +458,7 @@ export function Watch() {
                 void notifyOfflinePlayback(source, id, activeEp).catch(() => undefined);
               }} onError={playbackError} src={playlist} startAt={startAt} startPaused={retryResume?.episode === activeEp && retryResume.paused} onProgress={onProgress} onEnded={onEnded} remote={cast} returnPosition={returnPosition} favorited={!!data.favorited} onToggleFav={() => void toggleFav()} episodeControls={episodeControls} nextEpisode={nextEpisode && !cast.active && !cast.busy ? { title: nextEpisode.title, onPlay: () => pickEpisode(nextEpisode.id) } : undefined}
                 onPreviousEpisode={previousEpisode && !cast.active && !cast.busy ? () => pickEpisode(previousEpisode.id) : undefined}
-                media={{ title, episode: currentEp?.title, cover: data.cover }} />
+                media={APP.privateMediaSession ? { title: APP.name, episode: currentEp?.title } : { title, episode: currentEp?.title, cover: data.cover }} />
             ) : (
               <div className="player">
                 <div className="empty">{episodeError ? (recovery.pending ? "正在重新連線，稍後從原進度繼續…" : "這一集無法播放") : source === "anigamer" ? `正在準備${currentEp?.title || "這一集"}…` : `載入第${activeEp || ""}集…`}</div>
@@ -467,7 +475,7 @@ export function Watch() {
           <NextEpisodeBuffer key={`${source}:${id}:${activeEp}`} enabled={autoplay}
             url={episodes[epIds.indexOf(activeEp) + 1]?.playlist || ""}
             title={episodes[epIds.indexOf(activeEp) + 1]?.title || ""}
-            castSession={cast.active?.session_id} qualityKey="cinema.quality" />
+            castSession={cast.active?.session_id} qualityKey={storageKey("quality")} />
         </div>
         {manyEps ? (
           <aside className="ep-rail" aria-label="選集">
@@ -517,14 +525,14 @@ export function Watch() {
           <p className="orig-title">{data.original_title}</p>
         ) : null}
         <p className="muted">
-          {data.id}
+          {APP.lowercaseIds === null || APP.lowercaseIds.includes(source) ? data.id : data.id.toUpperCase()}
           {activeEp && manyEps ? ` · ${currentEp?.title || activeEp}` : ""}
           {data.duration_label ? ` · ${data.duration_label}` : ""}
           {data.release_date ? ` · ${data.release_date}` : ""}
           {translating ? " · 翻譯中…" : ""}
         </p>
         <div className="actions">
-          {hasZh ? (
+          {translated ? null : hasZh ? (
             <button className="btn alt" type="button" onClick={() => setShowOrig(!showOrig)}>
               {showOrig ? "顯示譯文" : "顯示原文"}
             </button>
@@ -554,7 +562,7 @@ export function Watch() {
         {notice ? <p className="status" role="alert">{notice}</p> : null}
         {data.actresses.length ? (
           <div className="cast-block">
-            <div className="cast-label">演員</div>
+            <div className="cast-label">{APP.peopleLabel}</div>
             <div className="chips">
               {data.actresses.map((t, i) => (
                 <Link

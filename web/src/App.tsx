@@ -1,7 +1,9 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate, useNavigationType } from "react-router-dom";
-import { TopBar } from "./components/TopBar";
+import { APP } from "./appConfig";
+import { AgeGate, ageOk } from "./components/AgeGate";
 import { PhonePair } from "./components/PhoneConnection";
+import { TopBar } from "./components/TopBar";
 import { PairPrompt } from "./components/PairPrompt";
 import { TvKeys } from "./components/TvKeys";
 import { Browse } from "./pages/Browse";
@@ -42,6 +44,7 @@ function appRoutes(prefix: string) {
 }
 
 export function App() {
+  const [ok, setOk] = useState(() => !APP.features.ageGate || ageOk());
   const loc = useLocation();
   const nav = useNavigate();
   const { tv } = useSource();
@@ -53,7 +56,7 @@ export function App() {
   // A pairing link (?c=) holds the pages back until the cookie is set; otherwise their first
   // requests are refused and show "請先用配對碼連電視" (and /?c= never paired at all).
   // /connect has its own pairing page.
-  const pairCode = loc.pathname === "/connect" ? null : new URLSearchParams(loc.search).get("c");
+  const pairCode = APP.features.phoneConnection && loc.pathname === "/connect" ? null : new URLSearchParams(loc.search).get("c");
   const [refused, setRefused] = useState({ code: "", message: "" });
   // Without a pairing link, a device the PC has not paired yet is asked for the code.
   const [paired, setPaired] = useState<boolean | null>(null);
@@ -102,7 +105,7 @@ export function App() {
   }, [list]);
 
   // The phone pairing link works on a device that is not paired yet: that is what it is for.
-  if (loc.pathname === "/connect") {
+  if (APP.features.phoneConnection && loc.pathname === "/connect") {
     return (
       <div className="app-shell">
         <main className="page"><PhonePair /></main>
@@ -130,6 +133,8 @@ export function App() {
       </div>
     );
   }
+
+  if (!ok) return <AgeGate onOk={() => setOk(true)} />;
 
   return (
     <div className={`app-shell${tv ? " tv-mode" : ""}`}>

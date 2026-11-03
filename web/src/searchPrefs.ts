@@ -1,8 +1,10 @@
 // Per-viewer search conveniences. Storage can be unavailable, so every access is guarded.
 export type Scope = "source" | "group" | "all";
 
-const SCOPE_KEY = "cinema.searchScope";
-const RECENT_KEY = "cinema.recentSearches";
+import { storageKey } from "./appConfig";
+
+const SCOPE_KEY = storageKey("searchScope");
+const RECENT_KEY = storageKey("recentSearches");
 const RECENT_MAX = 10;
 
 export function parseScope(raw: string | null | undefined): Scope {

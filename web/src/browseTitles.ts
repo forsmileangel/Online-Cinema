@@ -1,11 +1,22 @@
-// Headings for browse pages whose listing has no title of its own (this app's sources).
-export const BROWSE_TITLES: Record<string, string> = {
-  new: "最新上架",
+import { APP } from "./appConfig";
+
+// Headings for browse pages whose listing has no title of its own, for the sources of both sites;
+// the few that read differently per site come from appConfig.
+const SHARED_TITLES: Record<string, string> = {
+  "today-hot": "今日熱門",
+  "weekly-hot": "本週熱門",
+  "monthly-hot": "本月熱門",
+  release: "新作上市",
+  "chinese-subtitle": "中文字幕",
+  "uncensored-leak": "無碼流出",
   featured: "熱門短劇",
   recent: "最近上新",
+  "ai-duanju": "AI 成人短劇",
+  "ai-manju": "AI 成人漫劇",
+  "ai-huanlian": "AI 換臉",
+  "ai-mogai": "AI 魔改",
   "ranks-hot": "排行榜",
   tag: "標籤",
-  all: "全部",
   gudian: "古裝",
   dushi: "都市",
   jiating: "家庭",
@@ -17,7 +28,27 @@ export const BROWSE_TITLES: Record<string, string> = {
   lishi: "歷史",
   wangju: "網劇",
   tags: "標籤",
+  trend: "熱門影片",
+  md: "麻豆傳媒",
+  swag: "SWAG",
+  fc2: "FC2PPV",
+  tanhua: "探花精選",
+  mengruoyu: "孟若羽",
+  gc: "國產AV",
+  tw: "台灣AV",
+  leak: "自拍流出",
+  "139": "最新影片",
+  "140": "熱門影片",
+  "121": "麻豆傳媒",
+  "122": "SWAG",
+  "135": "FC2PPV",
+  today: "今日熱門",
+  censored: "有碼",
+  uncensored: "無碼",
+  "uncensored-leaked": "無碼流出",
+  makers: "片商",
   genres: "類型",
+  actresses: "女優",
   zhanzheng: "戰爭",
   fanzui: "犯罪",
   jingdian: "經典",
@@ -26,8 +57,6 @@ export const BROWSE_TITLES: Record<string, string> = {
   shangzhan: "商戰",
   qita: "其他",
   update: "最近更新",
-  latest: "最近更新",
-  hot: "最近熱門",
   cn: "陸劇",
   kr: "韓劇",
   jp: "日劇",
@@ -44,3 +73,5 @@ export const BROWSE_TITLES: Record<string, string> = {
   doc: "紀錄片",
   top: "排行榜",
 };
+
+export const BROWSE_TITLES: Record<string, string> = { ...SHARED_TITLES, ...APP.browseTitles };

@@ -2,6 +2,7 @@ import type Hls from "hls.js";
 import { api } from "../api";
 import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import type { CastingController } from "../hooks/useCasting";
+import { storageKey } from "../appConfig";
 import { useSource } from "../source";
 
 // hls.js is 60% of the bundle: it is fetched the first time an HLS stream plays, not with the home page.
@@ -9,9 +10,9 @@ type HlsModule = typeof import("hls.js");
 let hlsModule: HlsModule | null = null;
 const loadHls = () => (hlsModule ? Promise.resolve(hlsModule) : import("hls.js").then((m) => (hlsModule = m)));
 
-const VOL_KEY = "cinema.volume";
-const QUALITY_KEY = "cinema.quality";
-const RATE_KEY = "cinema.rate";
+const VOL_KEY = storageKey("volume");
+const QUALITY_KEY = storageKey("quality");
+const RATE_KEY = storageKey("rate");
 const RATES = [0.75, 1, 1.25, 1.5, 2];
 // Seconds between in-place retries of the same stream before a fresh source is resolved.
 const NETWORK_RETRIES = [1, 3, 6, 10, 15, 20];
@@ -212,6 +213,12 @@ export function Player({
   }
 
   useEffect(() => {
+    dragging.current = false;
+    setScrub(null);
+    setHoverX(null);
+  }, [src, casting, canSeek]);
+
+  useEffect(() => {
     if (remoteLevel != null && remoteLevel > 0) lastRemoteVol.current = remoteLevel;
   }, [remoteLevel]);
 
@@ -240,12 +247,6 @@ export function Player({
     // Commit once on release, rather than queueing a request per slider pixel.
     void remote.setVolume(next);
   }
-
-  useEffect(() => {
-    dragging.current = false;
-    setScrub(null);
-    setHoverX(null);
-  }, [src, casting, canSeek]);
 
   function applyVol(next: number, mute = false) {
     const v = videoRef.current;
@@ -337,7 +338,7 @@ export function Player({
         abrEwmaDefaultEstimate: 8_000_000,
         fragLoadPolicy: { default: {
           ...Hls.DefaultConfig.fragLoadPolicy.default,
-          // The proxy may retry over another adapter before sending a segment.
+          // The proxy finishes its own segment retries before replying.
           maxTimeToFirstByteMs: usingWeb720 ? 50000 : 22000,
           timeoutRetry: { ...Hls.DefaultConfig.fragLoadPolicy.default.timeoutRetry!, maxNumRetry: 2 },
           errorRetry: { ...Hls.DefaultConfig.fragLoadPolicy.default.errorRetry!, maxNumRetry: 2 },

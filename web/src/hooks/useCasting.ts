@@ -61,7 +61,8 @@ export function useCasting({ identity, playlist, title, context, getPosition, on
       const next = await api.castDevices();
       if (version !== generation.current) return;
       setDevices(next.devices);
-      setInKaohsiung(next.in_kaohsiung);
+      setInKaohsiung(!!next.in_kaohsiung);
+      // A remembered choice that is no longer listed must not stay selected.
       setSelected((old) => [old, next.selected].find((uuid) => next.devices.some((d) => d.uuid === uuid)) || next.devices[0]?.uuid || "");
       if (!next.devices.length) setMsg("沒找到電視，請先開機並確認位於同一 Wi-Fi。");
     } catch (e) { if (version === generation.current) setMsg(e instanceof Error ? e.message : "掃描失敗"); }

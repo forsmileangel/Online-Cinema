@@ -1,3 +1,5 @@
+import { storageKey } from "./appConfig";
+
 export type ThemeTokens = {
   bg: string;
   bg2: string;
@@ -341,7 +343,7 @@ export const PRESETS: ThemePreset[] = [
   },
 ];
 
-const STORAGE = "cinema.theme";
+const STORAGE = storageKey("theme");
 
 const CSS_MAP: Record<keyof ThemeTokens, string> = {
   bg: "--bg",

@@ -108,16 +108,21 @@ class MVFFMTests(unittest.TestCase):
         finished = threading.Event()
         def probe(url, deadline, stop):
             if url == 'slow':
-                stop.wait(1)
+                stop.wait(5)  # Ends at once when the fast line wins; 5 s if nothing stops it.
                 finished.set()
                 raise TimeoutError()
             return '/api/hls?u=fast'
+        # A pool of its own: probes left running by other tests must not queue this one (it failed that way
+        # when the whole suite ran on a busy machine).
+        pool = ThreadPoolExecutor(max_workers=6)
+        self.addCleanup(pool.shutdown, wait=False, cancel_futures=True)
         start = time.monotonic()
-        with patch.object(site, '_probe', side_effect=probe):
+        with patch.object(site, '_probe', side_effect=probe), patch.object(site, '_probes', pool):
             result = site._fastest('123', '1', [(0, 'slow'), (1, 'fast')])
-            self.assertTrue(finished.wait(1))
+            took = time.monotonic() - start
+            self.assertTrue(finished.wait(10))
         self.assertEqual(result, '/api/hls?u=fast')
-        self.assertLess(time.monotonic() - start, .5)
+        self.assertLess(took, 3, 'waiting for the slow line would take 5 s')
         self.assertEqual(site._preferred['123'][1], 1)
 
     def test_failed_initial_lines_fall_back_with_bounded_concurrency(self):

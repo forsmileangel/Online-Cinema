@@ -89,7 +89,7 @@ do {
 } while ((Get-Date) -lt $deadline -and ($null -eq $state -or $state.version -ne $version))
 if ($null -eq $state) { throw "the server did not answer within 120 s; see $env:APPDATA\<app>\server-logs" }
 if ($state.version -ne $version) { Write-Warning "server reports version $($state.version), expected $version" }
-$home = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/" -TimeoutSec 10
-if ($home.StatusCode -ne 200 -or $home.Content -notmatch '<div id="root">') { throw 'the home page did not come back' }
+$page = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/" -TimeoutSec 10
+if ($page.StatusCode -ne 200 -or $page.Content -notmatch '<div id="root">') { throw 'the home page did not come back' }
 if (Test-Path web/dist.previous) { Remove-Item -Recurse -Force web/dist.previous }
 Write-Host ("`ndeployed {0}: {1}" -f $version, ($state | ConvertTo-Json -Compress)) -ForegroundColor Green

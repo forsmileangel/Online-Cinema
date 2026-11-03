@@ -1,27 +1,29 @@
 # 線上電影院
 
-在你自己的電腦開一個觀賞介面：瀏覽、搜尋、播放。瀏覽器不會打開原站，所以原站的廣告與跳轉腳本不會進來。
+在你自己的電腦開一個觀賞介面：瀏覽、搜尋、播放、離線下載、投放到電視。瀏覽器不會打開原站，所以原站的廣告與跳轉腳本不會進來。
 
-片源有四個：紅果短劇、中國人線上看、Gimy 劇迷、DramaQ。
+片源有七個：MVFFM 電影線上看、中國人線上看、Gimy 劇迷、MMOV 電影線上看、DramaQ、紅果短劇、巴哈姆特動畫瘋，在頂端列的「來源」切換。
 
 雙擊 `start.bat`，瀏覽器開 `http://127.0.0.1:6970`。
 
 ## 使用
 
-1. 安裝 [Python 3.11+](https://www.python.org/downloads/)（勾選 Add to PATH）。第一次建置介面還需要 [Node.js](https://nodejs.org/)。
-2. 雙擊 `start.bat`。第一次會建虛擬環境、裝套件、建置前端。
+1. 安裝 [Python 3.12 以上](https://www.python.org/downloads/)（開發與鎖定版本是 3.14，勾選 Add to PATH）。第一次建置介面還需要 [Node.js](https://nodejs.org/)。
+2. 雙擊 `start.bat`。第一次會建虛擬環境、依 `requirements.lock` 裝套件、建置前端。
 3. 從首頁挑一部，或用劇名搜尋後播放。
-4. 進度條可點、可拖。空白鍵暫停，左右鍵快轉 10 秒，F 全螢幕。
+4. 進度條可點、可拖。空白鍵暫停，左右鍵快轉 10 秒，M 靜音，F 全螢幕，子母畫面按鈕在全螢幕旁。手機鎖定畫面與耳機按鈕可播放、暫停、上下集。
 
-觀看進度與收藏存在 `%APPDATA%\OnlineCinema\`，不上網同步。這份資料跟其他本機程式分開。
+觀看進度與收藏存在 `%APPDATA%\OnlineCinema\app.sqlite`，不上網同步，跟深夜電影院分開。同層 Amberbox 的「Cinema Data Backup」工作每天 04:00 備份到 `D:\AI工作區\備份`（還原步驟見 `Amberbox\docs\data-backup.md`）。封面快取在 `%APPDATA%\OnlineCinema\img-cache`（256 MB，可整個刪除）。
+
+離線下載：播放頁的「離線下載」可選多集下載到 `D:\AI工作區\離線影片`，720p 會用顯示卡轉檔，中斷後續傳；完成的集數優先本地播放，14 天沒看會自動清理。「離線影片」頁管理全部下載。
 
 集數清單固定在可視範圍內獨立捲動，開啟影片、換集或調整視窗大小時會定位目前集數。本機播放來源失敗時，重新解析與重試會保留當下秒數，適用各片源及集數。
 
 Windows 影片分段下載遇到逾時、斷線或資料不完整時，會偵測目前有預設閘道的網卡，嘗試用另一張網卡重新下載完整分段；只快取成功下載的內容，不拼接殘缺資料。網路變更後偵測結果最多保留 30 秒；沒有第二張可用網卡時沿用原連線重試。這是串流備援，不是離線下載或頻寬合併；兩張 Wi-Fi 連同一台路由器時仍共用上網線路，無法修復來源站損壞的分段。
 
-電視：設定開啟「允許同一 Wi-Fi 的電視連進來」，重開 `start.bat`，電視瀏覽器開畫面上的 `/tv?c=配對碼`。遙控器返回上一頁可再選片。
+電視：設定開啟「允許投放（區網）」，重啟工作或 `start.bat`，電視瀏覽器開畫面上的 `/tv?c=配對碼`。遙控器方向鍵依畫面位置移動，播放頁左右快轉、上鍵到選集、下鍵到投放列，返回鍵回上一頁。只有這台電腦的名稱與區網 IP 能當作網址（Host 檢查），跨站的寫入請求會被拒絕。
 
-手機：設定頁最上方的「手機連線」會偵測目前電腦的區網 IP、連接埠及本機服務是否回應，每 30 秒、回到頁面或恢復連線時自動更新，也可按「重新偵測」。換到高雄、台北等網路後，請使用新顯示的完整配對連結；配對後會開啟一般手機介面。多網卡會列出多個位址，請選與手機同網路的位址。此偵測不會更改「我在高雄」的電視顯示設定，也不代表手機端一定能穿過防火牆連線。
+手機：設定頁最上方的「手機連線」會偵測目前電腦的區網 IP、連接埠及本機服務是否回應，每 30 秒、回到頁面或恢復連線時自動更新，也可按「重新偵測」。換到高雄、台北等網路後，請使用新顯示的完整配對連結（`/connect?c=`，未配對的手機也打得開）；配對後會開啟一般手機介面。多網卡會列出多個位址，請選與手機同網路的位址。此偵測不會更改「我在高雄」的電視顯示設定，也不代表手機端一定能穿過防火牆連線。
 
 直接投放：播放頁的投放控制列位於播放器正下方，選擇 Chromecast 或 Philips、LG 等 DLNA 電視，再按「投放到電視」。LG 第一次可能顯示「外部控制請求」，請用遙控器允許。程式收到電視播放回報後才顯示成功；本機保持暫停，可控制電視暫停、續播、停止，停止後回到收到的播放位置。區網允許設定仍需開啟。
 
@@ -31,7 +33,14 @@ Chromecast／Nest Hub 投放時會自動檢查連線、重新搜尋失效連線�
 
 投放音量：Chromecast／Nest Hub 支援時，網頁會顯示接收端實際音量並提供滑桿、靜音。若裝置回報固定音量，改控制當前影片的串流音量，電視本身的喇叭音量仍由遙控器控制；不支援時會顯示提示。投放時畫質顯示為狀態（例如「最高 720p」或「投放自動」）；本機播放只有來源提供多種畫質時才顯示畫質選單。
 
-開發驗證：`python -B -m unittest discover -s tests -v`、在 `web` 執行 `npm run build`。
+## 開發
+
+- 全部檢查：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test.ps1`（共用檔比對、Python 測試、ESLint、型別、vitest、建置；加 `-E2E` 跑無頭瀏覽器檢查，需要 `pip install -r requirements-dev.txt` 與 Edge）。
+- 只跑後端測試：`python -B -m unittest discover -s tests`；只建前端：在 `web` 執行 `npm run build`。
+- 部署到背景服務：`scripts\deploy.ps1`（工作樹要乾淨；先建到 `dist.next`、跑測試、等沒有投放與下載，再換 `dist` 並重啟工作）。
+- 兩站共用的檔案（`web/src` 除了 `appConfig.ts`、後端共用模組、e2e、scripts）必須一字不差：`python tools/check-shared.py` 列出漂移，`--sync` 把這邊的版本蓋到另一邊。
+- 排序選項的實測紀錄：`python tools/verify_sorts.py <source> <kind> [slug]`，結果見 `docs/sort-verification-2026-10-26.md`。
+- 歷次修改紀錄在 Notion「版本歷程」。
 
 ## 資安
 
@@ -50,7 +59,7 @@ Chromecast／Nest Hub 投放時會自動檢查連線、重新搜尋失效連線�
 
 ## 背景常駐與新版播放流程
 
-在同層 Amberbox 執行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-background.ps1 -Apps OnlineCinema`，只建立／更新 Online Cinema 的獨立無視窗工作。登入後自啟，程序退出後自動恢復；記錄在 `%APPDATA%\OnlineCinema\server-logs`。變更區網設定後重啟「Online Cinema Server」工作即可，不必再開 start.bat。電腦睡眠、關機或登出時不提供服務。
+在同層 Amberbox 執行 `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-background.ps1 -Apps OnlineCinema`，只建立／更新 Online Cinema 的獨立無視窗工作（用本 repo 的 `.venv`）。登入後自啟，程序退出後自動恢復，連續崩潰會放慢重啟並在 `%APPDATA%\OnlineCinema\server-logs\ALERT.txt` 留下訊息；記錄在同一個資料夾（`app.log` 有時間戳記，5 MB 輪替）。變更區網設定後重啟「Online Cinema Server」工作即可，不必再開 start.bat。電腦睡眠、關機或登出時不提供服務。
 
 [新增片源與投放修正紀錄](docs/source-playback-repair-2026-09-23.md)。
 

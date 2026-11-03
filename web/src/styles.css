@@ -760,7 +760,7 @@ select.field, .field {
   .ep-rail-list { grid-auto-rows: minmax(44px, auto); }
   .poster-retry { min-height: 44px; }
   .brand, .more { min-height: 44px; display: inline-flex; align-items: center; }
-  .more { padding: 0 6px; }
+  .more { padding: 0 6px; min-width: 44px; justify-content: center; }
   .search input, input.field { min-height: 44px; }
   .tune-row input[type="color"] { width: 44px; height: 44px; }
 }

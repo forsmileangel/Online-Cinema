@@ -29,7 +29,7 @@ const SRC_BADGE: Record<string, string> = {
   dramaq: "DramaQ",
 };
 
-function retriedCoverUrl(cover: string, token: string) {
+export function retriedCoverUrl(cover: string, token: string) {
   if (!token) return cover;
   try {
     const url = new URL(cover, window.location.href);

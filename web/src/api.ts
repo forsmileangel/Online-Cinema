@@ -77,9 +77,9 @@ async function req<T>(path: string, init?: RequestInit, timeoutMs = DEFAULT_TIME
     }
     return await res.json() as T;
   } catch (e) {
-    if (timedOut) throw new Error("等待回應逾時，請重試");
+    if (timedOut) throw new Error("等待回應逾時，請重試", { cause: e });
     // fetch rejects with a TypeError when the server cannot be reached at all.
-    if (e instanceof TypeError) throw new Error("無法連線到伺服器，請確認服務是否在執行");
+    if (e instanceof TypeError) throw new Error("無法連線到伺服器，請確認服務是否在執行", { cause: e });
     throw e;
   } finally {
     clearTimeout(timer);

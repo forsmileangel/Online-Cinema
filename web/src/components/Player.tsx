@@ -525,7 +525,8 @@ export function Player({
         e.preventDefault();
         if (e.key === "MediaPause") v.pause();
         else if (e.key === "MediaPlay") void v.play();
-        else v.paused ? void v.play() : v.pause();
+        else if (v.paused) void v.play();
+        else v.pause();
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         seekBy(10);
@@ -663,7 +664,8 @@ export function Player({
     }
     const v = videoRef.current;
     if (!v) return;
-    v.paused ? void v.play() : v.pause();
+    if (v.paused) void v.play();
+    else v.pause();
   }
 
   function toggleMute() {

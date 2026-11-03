@@ -1,0 +1,2 @@
+# Only for the headless browser checks under e2e/ (python -m pip install -r requirements-dev.txt).
+websockets>=13

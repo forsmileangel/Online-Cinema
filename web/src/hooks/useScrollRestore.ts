@@ -6,7 +6,7 @@ import { useSource } from "../source";
 const positions = new Map<string, number>();
 const opened = new Map<string, string>();
 
-if ("scrollRestoration" in window.history) window.history.scrollRestoration = "manual";
+if (typeof window !== "undefined" && "scrollRestoration" in window.history) window.history.scrollRestoration = "manual";
 
 export function rememberOpened(key: string, href: string) {
   opened.set(key, href);

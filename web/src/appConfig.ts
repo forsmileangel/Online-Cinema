@@ -47,6 +47,8 @@ export const APP = {
     ageGate: false,
     /** The ininAV account section in settings and the login hint on its videos. */
     ininav: false,
+    /** The 黃果短劇 account section in settings and the login hint on its videos. */
+    huangguoAccount: false,
     /** Mirror choice and listing language in settings (MissAV). */
     mirrors: false,
     /** The 我在高雄 switch that reveals the Kaohsiung TV. */

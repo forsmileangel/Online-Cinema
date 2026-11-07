@@ -2,6 +2,7 @@ import { APP } from "./appConfig";
 import type { Alternative, Card, HistoryItem, HomePayload, Listing, MultiResult, Settings, VideoDetail } from "./types";
 
 export type IninavStatus = { logged_in: boolean; email: string };
+export type HuangguoStatus = { logged_in: boolean; username: string };
 export type ConnectionInfo = {
   enabled: boolean;
   port: number;
@@ -207,6 +208,10 @@ export const api = {
   ininavLogin: (email: string, password: string) =>
     req<IninavStatus>("/api/ininav/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   ininavLogout: () => req<IninavStatus>("/api/ininav/logout", { method: "POST" }),
+  huangguoStatus: () => req<HuangguoStatus>("/api/huangguo/status"),
+  huangguoLogin: (username: string, password: string) =>
+    req<HuangguoStatus>("/api/huangguo/login", { method: "POST", body: JSON.stringify({ username, password }) }),
+  huangguoLogout: () => req<HuangguoStatus>("/api/huangguo/logout", { method: "POST" }),
   connection: (signal?: AbortSignal) => req<ConnectionInfo>("/api/connection", { signal, cache: "no-store" }, 10000),
   settings: () => req<Settings>("/api/settings"),
   saveSettings: (body: {

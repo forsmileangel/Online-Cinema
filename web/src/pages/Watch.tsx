@@ -419,8 +419,9 @@ export function Watch() {
       <p>無法載入影片：{err}</p>
       <div className="actions">
         <button className="btn" type="button" data-tv="1" onClick={() => setLoadAttempt(n => n + 1)}>重新載入</button>
-        {/* Members-only ininAV videos: the account is managed on this computer's settings page. */}
-        {APP.features.ininav && source === "ininav" && !prefix && err.includes("「設定」") && (
+        {/* Members-only videos: the account is managed on this computer's settings page. */}
+        {((APP.features.ininav && source === "ininav") || (APP.features.huangguoAccount && source === "huangguo"))
+          && !prefix && err.includes("「設定」") && (
           <Link className="btn alt" data-tv="1" to="/settings">前往設定登入</Link>
         )}
         <Link className="btn alt" data-tv="1" to={prefix || "/"}>返回首頁</Link>

@@ -1,22 +1,64 @@
 import { useEffect, useState } from "react";
-import { api, type IninavStatus } from "../api";
+import { api } from "../api";
 import { APP } from "../appConfig";
 import { AppearanceSettings } from "../components/AppearanceSettings";
 import { PhoneConnection } from "../components/PhoneConnection";
 import type { Settings } from "../types";
 
-/** The ininAV member account: the session is kept on this PC's server, never the password. */
-function IninavAccount() {
-  const [account, setAccount] = useState<IninavStatus | null>(null);
-  const [email, setEmail] = useState("");
+type AccountState = { loggedIn: boolean; name: string };
+
+type AccountSource = {
+  title: string;
+  /** What the site calls the login name, and how the field behaves. */
+  nameLabel: string;
+  nameType: "email" | "text";
+  nameMax: number;
+  passwordMax: number;
+  note: string;
+  load: () => Promise<AccountState>;
+  login: (name: string, password: string) => Promise<AccountState>;
+  logout: () => Promise<AccountState>;
+};
+
+const ininavState = (s: { logged_in: boolean; email: string }): AccountState => ({ loggedIn: s.logged_in, name: s.email });
+const huangguoState = (s: { logged_in: boolean; username: string }): AccountState => ({ loggedIn: s.logged_in, name: s.username });
+
+const ININAV_ACCOUNT: AccountSource = {
+  title: "ininAV",
+  nameLabel: "信箱",
+  nameType: "email",
+  nameMax: 254,
+  passwordMax: 1024,
+  note: "未登入也能瀏覽與播放。登入後只儲存登入憑證與信箱，不儲存密碼；帳號操作限這台電腦。",
+  load: () => api.ininavStatus().then(ininavState),
+  login: (name, password) => api.ininavLogin(name, password).then(ininavState),
+  logout: () => api.ininavLogout().then(ininavState),
+};
+
+const HUANGGUO_ACCOUNT: AccountSource = {
+  title: "黃果短劇",
+  nameLabel: "帳號",
+  nameType: "text",
+  nameMax: 20,
+  passwordMax: 20,
+  note: "未登入也能瀏覽與播放。登入後只儲存登入憑證與帳號，不儲存密碼；登入過期要再登入一次，帳號操作限這台電腦。",
+  load: () => api.huangguoStatus().then(huangguoState),
+  login: (name, password) => api.huangguoLogin(name, password).then(huangguoState),
+  logout: () => api.huangguoLogout().then(huangguoState),
+};
+
+/** A member account at a source: the session is kept on this PC's server, never the password. */
+function SourceAccount({ source }: { source: AccountSource }) {
+  const [account, setAccount] = useState<AccountState | null>(null);
+  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
   useEffect(() => {
-    api.ininavStatus().then((next) => { setAccount(next); setEmail(next.email); })
+    source.load().then((next) => { setAccount(next); setName(next.name); })
       .catch((e: Error) => setMsg(e.message));
-  }, []);
+  }, [source]);
 
   async function update(logout = false) {
     if (busy) return;
@@ -25,9 +67,9 @@ function IninavAccount() {
     const submittedPassword = password;
     setPassword("");
     try {
-      const next = logout ? await api.ininavLogout() : await api.ininavLogin(email, submittedPassword);
+      const next = logout ? await source.logout() : await source.login(name, submittedPassword);
       setAccount(next);
-      setEmail(next.email);
+      setName(next.name);
       setMsg(logout ? "已登出" : "登入成功");
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "帳號操作失敗，請重試");
@@ -37,21 +79,21 @@ function IninavAccount() {
   }
 
   return (
-    <section aria-label="ininAV 帳號">
-      <h2 className="h1" style={{ fontSize: 20, marginTop: 28 }}>ininAV 帳號</h2>
-      <p className="muted">未登入也能瀏覽與播放。登入後只儲存登入憑證與信箱，不儲存密碼；帳號操作限這台電腦。</p>
-      <p role="status">{account ? (account.logged_in ? `已登入：${account.email}` : "尚未登入") : "登入狀態尚未載入"}</p>
-      {account?.logged_in ? (
+    <section aria-label={`${source.title} 帳號`}>
+      <h2 className="h1" style={{ fontSize: 20, marginTop: 28 }}>{source.title} 帳號</h2>
+      <p className="muted">{source.note}</p>
+      <p role="status">{account ? (account.loggedIn ? `已登入：${account.name}` : "尚未登入") : "登入狀態尚未載入"}</p>
+      {account?.loggedIn ? (
         <button className="btn alt" type="button" disabled={busy} onClick={() => void update(true)}>
-          {busy ? "登出中…" : "登出 ininAV"}
+          {busy ? "登出中…" : `登出 ${source.title}`}
         </button>
       ) : (
         <form onSubmit={(e) => { e.preventDefault(); void update(); }}>
-          <p><label>信箱 <input className="field" type="email" autoComplete="username" required maxLength={254}
-            value={email} onChange={(e) => setEmail(e.target.value)} disabled={busy || !account} /></label></p>
-          <p><label>密碼 <input className="field" type="password" autoComplete="current-password" required maxLength={1024}
+          <p><label>{source.nameLabel} <input className="field" type={source.nameType} autoComplete="username" required maxLength={source.nameMax}
+            value={name} onChange={(e) => setName(e.target.value)} disabled={busy || !account} /></label></p>
+          <p><label>密碼 <input className="field" type="password" autoComplete="current-password" required maxLength={source.passwordMax}
             value={password} onChange={(e) => setPassword(e.target.value)} disabled={busy || !account} /></label></p>
-          <button className="btn" type="submit" disabled={busy || !account}>{busy ? "登入中…" : "登入 ininAV"}</button>
+          <button className="btn" type="submit" disabled={busy || !account}>{busy ? "登入中…" : `登入 ${source.title}`}</button>
         </form>
       )}
       {msg ? <p className="status" role="status">{msg}</p> : null}
@@ -140,7 +182,8 @@ export function SettingsPage() {
         </>
       ) : <StaticPhoneAddresses s={s} />}
 
-      {APP.features.ininav ? <IninavAccount /> : null}
+      {APP.features.ininav ? <SourceAccount source={ININAV_ACCOUNT} /> : null}
+      {APP.features.huangguoAccount ? <SourceAccount source={HUANGGUO_ACCOUNT} /> : null}
 
       <AppearanceSettings onMessage={setMsg} />
 

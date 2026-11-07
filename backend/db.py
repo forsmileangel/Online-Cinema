@@ -112,6 +112,8 @@ def _migrate_keys(conn: sqlite3.Connection) -> None:
 # connection keeps the table in memory after one load; every write drops all copies.
 _settings_lock = threading.Lock()
 _settings: dict[int, tuple[sqlite3.Connection, dict[str, str]]] = {}
+# A load that began before a write must not be remembered after it.
+_settings_writes = 0
 
 
 def _settings_table() -> dict[str, str]:
@@ -120,13 +122,22 @@ def _settings_table() -> dict[str, str]:
         entry = _settings.get(id(conn))
         if entry is not None and entry[0] is conn:
             return entry[1]
+        writes = _settings_writes
     rows = conn.execute("SELECT key, value FROM settings").fetchall()
     table = {str(row["key"]): str(row["value"]) for row in rows}
     with _settings_lock:
-        if len(_settings) >= 128:
-            _settings.clear()
-        _settings[id(conn)] = (conn, table)
+        if writes == _settings_writes:
+            if len(_settings) >= 128:
+                _settings.clear()
+            _settings[id(conn)] = (conn, table)
     return table
+
+
+def _settings_changed() -> None:
+    global _settings_writes
+    with _settings_lock:
+        _settings_writes += 1
+        _settings.clear()
 
 
 def get_setting(key: str, default: str = "") -> str:
@@ -139,15 +150,13 @@ def set_setting(key: str, value: str) -> None:
         (key, value),
     )
     connect().commit()
-    with _settings_lock:
-        _settings.clear()
+    _settings_changed()
 
 
 def delete_setting(key: str) -> None:
     connect().execute("DELETE FROM settings WHERE key = ?", (key,))
     connect().commit()
-    with _settings_lock:
-        _settings.clear()
+    _settings_changed()
 
 
 def list_favorites() -> list[dict]:

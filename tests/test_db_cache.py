@@ -35,6 +35,22 @@ class SettingsCacheTests(unittest.TestCase):
         db.delete_setting("lan_tv")
         self.assertEqual(db.get_setting("lan_tv", "unset"), "unset")
 
+    def test_a_load_overtaken_by_a_write_is_not_remembered(self):
+        db.set_setting("locale", "old")
+        written = []
+
+        def read_then_someone_writes(sql, *args):
+            rows = self.real.execute(sql, *args).fetchall()
+            if sql.startswith("SELECT key") and not written:
+                written.append(True)
+                db.set_setting("locale", "new")
+            return Mock(fetchall=Mock(return_value=rows))
+
+        self.conn.execute.side_effect = read_then_someone_writes
+        self.assertEqual(db.get_setting("locale"), "old", "this load began before the write")
+        self.conn.execute.side_effect = None
+        self.assertEqual(db.get_setting("locale"), "new")
+
     def test_another_connection_sees_the_write_too(self):
         db.set_setting("locale", "ja")
         self.assertEqual(db.get_setting("locale"), "ja")

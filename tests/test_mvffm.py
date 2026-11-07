@@ -1,3 +1,4 @@
+import base64
 import json
 import threading
 import time
@@ -89,6 +90,28 @@ class MVFFMTests(unittest.TestCase):
         self.assertEqual(len(site._episodes(player([{'url': 'https://a.test/a.m3u8'}, {'url': 'https://b.test/a.mp4'}]))['1'][1]), 2)
         self.assertFalse(site._episodes('videourls:executeRemoteCode()'))
         self.assertFalse(site._episodes(player([{'url': 'https://a.test/embed.html'}])))
+
+    def test_base64_stream_addresses_are_decoded(self):
+        encoded = lambda url: base64.b64encode(url.encode()).decode()
+        choices = site._episodes(player([[{'name': '01', 'url': encoded('https://v6.ppqrrs.com/a/video/index.m3u8')},
+                                          {'name': '02', 'url': encoded('https://v6.ppqrrs.com/b/video/index.m3u8').rstrip('=')}],
+                                         [{'name': '01', 'url': 'https://b.test/plain.m3u8'}]]))
+        self.assertEqual(list(choices), ['1', '2'])
+        self.assertEqual([url for _, url in choices['1'][1]],
+                         ['https://v6.ppqrrs.com/a/video/index.m3u8', 'https://b.test/plain.m3u8'])
+        self.assertEqual(choices['2'][1][0][1], 'https://v6.ppqrrs.com/b/video/index.m3u8')
+
+    def test_movie_pages_percent_encode_inside_the_base64(self):
+        wrapped = base64.b64encode(b'https%3A%2F%2Fhd.example.test%2Fplay%2Fabc%2Findex.m3u8').decode()
+        choices = site._episodes(player([{'ep': 0, 'qname': 'HD', 'source': 0, 'type': 'hls', 'url': wrapped}]))
+        self.assertEqual(choices['1'][1], [(0, 'https://hd.example.test/play/abc/index.m3u8')])
+
+    def test_encoded_addresses_still_have_to_name_a_stream(self):
+        encoded = lambda url: base64.b64encode(url.encode()).decode()
+        self.assertFalse(site._episodes(player([{'url': encoded('https://a.test/embed.html')}])))
+        self.assertFalse(site._episodes(player([{'url': base64.b64encode(b'\xff\xfe\xfd').decode()}])))
+        self.assertFalse(site._episodes(player([{'url': encoded('https://[bad/a.m3u8')}])))
+        self.assertFalse(site._episodes(player([{'url': 42}])))
 
     def test_fetch_rejects_unknown_episode_before_probing(self):
         with patch.object(site, '_get', return_value=player([{'url': 'https://a.test/a.m3u8'}])), patch.object(site, '_fastest') as probe:

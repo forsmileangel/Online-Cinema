@@ -1,6 +1,7 @@
 """MVFFM public catalog and direct streams; source scripts are parsed, never run."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -8,7 +9,7 @@ import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from urllib.parse import parse_qs, quote, urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -268,6 +269,22 @@ def search(query: str, page: int = 1) -> Listing:
     return _listing("/xssearch?" + urlencode({"q": query}), page, query)
 
 
+def _stream_url(raw) -> str:
+    """The site now Base64-encodes its stream addresses (its player's dec() runs atob); older pages hold them plain."""
+    if not isinstance(raw, str):
+        return ""
+    try:
+        url = base64.b64decode(raw + "=" * (-len(raw) % 4), validate=True).decode("utf-8")
+    except ValueError:
+        url = raw
+    # Movie pages percent-encode the address before the Base64.
+    url = url if "://" in url else unquote(url)
+    try:
+        return url if urlparse(url).path.lower().endswith((".m3u8", ".mp4")) else ""
+    except ValueError:
+        return ""
+
+
 def _episodes(html: str):
     match = re.search(r"\bvideourls\s*:", html)
     choices = OrderedDict()
@@ -284,8 +301,8 @@ def _episodes(html: str):
         for item in ([entries] if movie else entries if isinstance(entries, list) else [])[:2000]:
             if not isinstance(item, dict):
                 continue
-            url = item.get("url")
-            if not isinstance(url, str) or not urlparse(url).path.lower().endswith((".m3u8", ".mp4")):
+            url = _stream_url(item.get("url"))
+            if not url:
                 continue
             title = "正片" if movie else str(item.get("name", "")).strip()
             if not title:

@@ -12,7 +12,7 @@ from . import zh
 from .models import Card, HomePayload, Listing, VideoDetail
 
 # Sources measured to carry Simplified titles (sampled from their home pages).
-SOURCES = frozenset({"hongguo", "huangguo", "huangguo2", "duanju51", "91md", "pornhub", "mvffm", "mmov"})
+SOURCES = frozenset({"hongguo", "huangguo", "huangguo2", "91dj", "duanju51", "91md", "pornhub", "mvffm", "mmov"})
 # Japanese and Korean titles share characters with Chinese ones; leave them as written.
 _KANA_HANGUL = re.compile(r"[぀-ヿ가-힯]")
 

@@ -13,6 +13,7 @@ const SRC_BADGE: Record<string, string> = {
   netflav: "Netflav",
   huangguo: "黃果短劇",
   huangguo2: "黃果短劇2",
+  "91dj": "91短劇",
   hongguo: "紅果短劇",
   avple: "AVPLE",
   javday: "JAVDAY",

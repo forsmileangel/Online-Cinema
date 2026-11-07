@@ -191,5 +191,5 @@ export function searchHint(group: string) {
 }
 
 /** Sources whose covers are posters (measured 2:3 to 4:5); the rest are 16:9 or 3:2 stills. */
-const PORTRAIT_SOURCES = new Set(["hongguo", "huangguo", "huangguo2", "duanju51", "chinaq", "gimy", "mmov", "mvffm", "dramaq"]);
+const PORTRAIT_SOURCES = new Set(["hongguo", "huangguo", "huangguo2", "91dj", "duanju51", "chinaq", "gimy", "mmov", "mvffm", "dramaq"]);
 export const isPortrait = (source?: string) => !!source && PORTRAIT_SOURCES.has(source);

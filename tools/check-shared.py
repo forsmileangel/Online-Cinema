@@ -35,7 +35,7 @@ SHARED_FILES = [
     "tests/test_read_ahead.py", "tests/test_search_multi.py", "tests/test_seg_cache.py", "tests/test_sorting.py",
     "tests/test_startup.py", "tests/test_terms.py", "tests/test_tv_pairing.py", "tests/test_wake.py",
     "tests/test_web_quality.py", "tests/test_web_serving.py", "tests/test_shared_files.py", "tests/test_zh.py",
-    "tools/check-shared.py", "tools/verify_sorts.py",
+    "tools/check-shared.py", "tools/check-sources.py", "tools/verify_sorts.py",
     "scripts/deploy.ps1", "scripts/test.ps1",
     "web/eslint.config.js", "web/public/favicon.svg", "web/public/icon-192.png", "web/public/icon-512.png",
     "web/public/apple-touch-icon.png",

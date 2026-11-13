@@ -25,6 +25,9 @@ GENRES = {"6": "動作片", "7": "喜劇片", "8": "愛情片", "9": "科幻片"
           "11": "劇情片", "12": "戰爭片", "20": "冒險片", "21": "懸疑片", "14": "台劇",
           "13": "陸劇", "15": "韓劇", "35": "日劇", "34": "港劇", "36": "泰劇",
           "37": "越劇", "16": "歐美劇", "33": "海外劇"}
+_HOME_HEADINGS = {"最新劇集劇情介紹": ("hot_tv", "最新劇集"), "熱門電影劇情介紹": ("hot_movie", "熱門電影"),
+                  "電影劇情介紹大全": ("movie", "電影"), "連續劇劇情介紹大全": ("tv", "連續劇"),
+                  "綜藝劇情介紹大全": ("show", "綜藝"), "動漫劇情介紹大全": ("anime", "動漫")}
 _lock = threading.RLock()
 _search_lock = threading.Lock()
 _SEARCH_INTERVAL = 5.5
@@ -156,6 +159,8 @@ def home_bundle():
         title = heading.get_text(" ", strip=True).replace("hk.mmov.app", "").strip()
         kind = {"本週熱播TV": "hot_tv", "近期熱門電影": "hot_movie", "電影": "movie",
                 "連續劇": "tv", "綜藝": "show", "動漫": "anime"}.get(title)
+        if not kind:  # The headings since 2026-11: 最新劇集劇情介紹, 電影劇情介紹大全, ...
+            kind, title = _HOME_HEADINGS.get(title, ("", title))
         cards = parse_cards(str(panel))
         if kind and cards:
             rows.append((kind, title, cards))

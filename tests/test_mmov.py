@@ -29,6 +29,17 @@ class MMOVTests(unittest.TestCase):
             p = patch.object(security, name, {})
             p.start(); self.addCleanup(p.stop)
 
+    def test_home_reads_the_headings_the_site_renamed(self):
+        def panel(heading, number):
+            return (f'<div class="stui-pannel"><div class="stui-pannel__head"><h2 class="title"><a href="/type/1.html">{heading}</a></h2></div>'
+                    f'<a class="stui-vodlist__thumb" href="/vod/{number}.html" title="測試{number} 線上看" data-src="https://img.mmov.app/a.jpg"></a></div>')
+        page = ''.join(panel(heading, number) for number, heading in enumerate(
+            ('最新劇集劇情介紹', '熱門電影劇情介紹', '電影劇情介紹大全', '連續劇劇情介紹大全', '綜藝劇情介紹大全', '動漫劇情介紹大全', '關於MMOV電影線上看'), 1))
+        with patch.object(mmov, '_get', return_value=page):
+            rows, _picks = mmov.home_bundle()
+        self.assertEqual([(kind, title) for kind, title, _cards in rows],
+                         [('hot_tv', '最新劇集'), ('hot_movie', '熱門電影'), ('movie', '電影'), ('tv', '連續劇'), ('show', '綜藝'), ('anime', '動漫')])
+
     def test_home_cards_categories_and_empty_or_foreign_covers(self):
         with patch.object(mmov, '_get', return_value=fixture('home')):
             rows, picks = mmov.home_bundle()

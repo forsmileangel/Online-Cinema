@@ -29,6 +29,13 @@ class MMOVTests(unittest.TestCase):
             p = patch.object(security, name, {})
             p.start(); self.addCleanup(p.stop)
 
+    def test_episode_links_on_the_listing_host_open_the_player_host(self):
+        soup = mmov.BeautifulSoup('<ul class="stui-content__playlist"><li><a href="/vodplay/519072/4-1.html">HD</a></li>'
+                                  '<li><a href="https://hk.mmov.io/vodplay/519072/2-1.html">HD</a></li>'
+                                  '<li><a href="https://evil.example/vodplay/519072/3-1.html">HD</a></li></ul>', 'html.parser')
+        self.assertEqual(mmov._episodes(soup, '519072')['p1'][1], [('4', 'https://hk.mmov.io/vodplay/519072/4-1.html'),
+                                                                   ('2', 'https://hk.mmov.io/vodplay/519072/2-1.html')])
+
     def test_home_reads_the_headings_the_site_renamed(self):
         def panel(heading, number):
             return (f'<div class="stui-pannel"><div class="stui-pannel__head"><h2 class="title"><a href="/type/1.html">{heading}</a></h2></div>'

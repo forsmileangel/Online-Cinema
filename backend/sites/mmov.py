@@ -245,7 +245,9 @@ def _episodes(soup: BeautifulSoup, video_id: str):
             continue
         if episode_id not in episodes:
             episodes[episode_id] = (title or "正片", [])
-        candidate = (m[2], p.geturl())
+        # Since 2026-11 the episode links stay on hk.mmov.app, whose pages only describe the film; the
+        # player is at the same path on hk.mmov.io.
+        candidate = (m[2], PLAYER_ORIGIN + p.path)
         if candidate not in episodes[episode_id][1]:
             episodes[episode_id][1].append(candidate)
     return episodes

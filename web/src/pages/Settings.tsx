@@ -162,9 +162,12 @@ export function SettingsPage() {
   const [s, setS] = useState<Settings | null>(null);
   const [msg, setMsg] = useState("");
   const [savingLocation, setSavingLocation] = useState(false);
+  /** The commit the server runs: with the page's own version it tells whether a deploy took. */
+  const [commit, setCommit] = useState("");
 
   useEffect(() => {
     api.settings().then(setS).catch((e: Error) => setMsg(e.message));
+    api.health().then((h) => setCommit(h.version || "")).catch(() => setCommit(""));
   }, []);
 
   const failed = (what: string) => (e: Error) => setMsg(`${what}失敗：${e.message}`);
@@ -332,6 +335,11 @@ export function SettingsPage() {
           清除觀看紀錄
         </button>
       </div>
+      <h2 className="h1" style={{ fontSize: 20, marginTop: 36 }}>版本</h2>
+      <p aria-label="版本">
+        {APP.name} <strong>V{__APP_VERSION__}</strong>
+        {commit ? <span className="muted"> · 程式代碼 <code>{commit}</code></span> : null}
+      </p>
       {msg ? <p className="status" role="status">{msg}</p> : null}
     </div>
   );

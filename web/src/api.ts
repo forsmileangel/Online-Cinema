@@ -163,7 +163,7 @@ export const api = {
     const upstream = new URL(src, window.location.origin).searchParams.get("u") || "";
     return req<{ url: string }>(`/api/playback/720p?u=${encodeURIComponent(upstream)}`, { signal }, 30000);
   },
-  health: () => req<{ ok: boolean; mirror?: string }>("/api/health"),
+  health: () => req<{ ok: boolean; mirror?: string; version?: string }>("/api/health"),
   home: (source?: string, signal?: AbortSignal) =>
     list<HomePayload>(homePath(source), signal, slowHome(source)),
   peekHome: (source?: string) => peek<HomePayload>(homePath(source)),

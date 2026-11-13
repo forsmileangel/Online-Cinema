@@ -53,6 +53,7 @@ export function TopBar() {
       <NavLink to={prefix || "/"} className="brand">
         <span className="brand-mark" />
         {APP.name}
+        <span className="brand-version" title="目前執行的版本">V{__APP_VERSION__}</span>
       </NavLink>
       <form className="search" role="search" onSubmit={onSearch}>
         <input

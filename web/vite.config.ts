@@ -1,8 +1,11 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import pkg from "./package.json";
 
 export default defineConfig({
   plugins: [react()],
+  // The version shown in the top bar and on the settings page.
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   test: { environment: "node", include: ["src/**/*.test.ts"] },
   server: {
     port: 5173,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Walk every source of the running site: home page, video, playlist, key, first segment, covers.
+"""Walk every source of the running site: home page, second page, video, playlist, key, first segment, covers.
 
 Run from either repository when a site may have changed its pages:
 
@@ -8,7 +8,8 @@ Run from either repository when a site may have changed its pages:
     python tools/check-sources.py --kind new huangguo2  sample a listing instead of the home page
 
 GET requests only, so favourites and history stay as they are. Prints source ids, counts and statuses:
-no titles, and only numeric video ids. Exits 1 when a source has no playable sample.
+no titles, and only numeric video ids. Exits 1 when a source has no playable sample, or when the
+second page of a list only repeats the first.
 """
 import argparse
 import json
@@ -136,6 +137,33 @@ def check_stream(base: str, playlist: str) -> tuple[bool, str]:
     return segment_plays(kind) or bool(init), f"{note} seg={kind} {took:.1f}s"
 
 
+def list_ids(base: str, source: str, kind: str, slug: str, page: int) -> tuple[list[str], bool] | None:
+    path = f"/api/browse/{quote(kind, safe='')}" + (f"/{quote(slug, safe='')}" if slug else "")
+    status, body, _, _ = fetch(f"{base}{path}?source={source}&page={page}", timeout=60)
+    if status != 200:
+        return None
+    data = json.loads(body)
+    return [str(card["id"]) for card in data.get("items") or []], bool(data.get("has_next"))
+
+
+def check_paging(base: str, source: str, lists: list[tuple[str, str]]) -> str:
+    """Compares the first two pages of the first list that has a second one. "REPEAT" is a fault."""
+    for kind, slug in lists[:3]:
+        first = list_ids(base, source, kind, slug, 1)
+        if not first or not first[0] or not first[1]:
+            continue
+        second = list_ids(base, source, kind, slug, 2)
+        if second is None:
+            return f"page2 FAIL {kind}"
+        repeated = len(set(second[0]) & set(first[0]))
+        if not second[0]:
+            return f"page2 EMPTY {kind}"
+        if repeated == len(set(second[0])):
+            return f"page2 REPEAT {kind} {repeated}/{len(second[0])}"
+        return f"page2 ok {kind} {len(first[0])}+{len(second[0])}" + (f" repeated={repeated}" if repeated else "")
+    return "page2 n/a"
+
+
 def check_source(base: str, source: str, kind: str, samples: int) -> str:
     """Prints the source's report and returns PASS, FAIL or WAIT (nothing a GET request could judge)."""
     path = f"/api/browse/{kind}?source={source}" if kind else f"/api/home?source={source}"
@@ -144,6 +172,9 @@ def check_source(base: str, source: str, kind: str, samples: int) -> str:
         print(f"{source:10} FAIL list {status} {took:.1f}s {detail(body)}", flush=True)
         return "FAIL"
     cards = unique_cards(body)
+    rows = [] if kind else json.loads(body).get("rows") or []
+    paging = check_paging(base, source, [(kind, "")] if kind else
+                          [(row["kind"], row.get("slug") or "") for row in rows if row.get("more")])
     picked = cards[:: max(1, len(cards) // samples)][:samples]
     results, passed, waiting = [], 0, 0
     for card in picked:
@@ -176,7 +207,9 @@ def check_source(base: str, source: str, kind: str, samples: int) -> str:
         label = "ok" if status == 200 and "image" in ctype else str(status)
         covers[label] = covers.get(label, 0) + 1
     verdict = "PASS" if passed else "WAIT" if waiting else "FAIL"
-    print(f"{source:10} {verdict} {len(cards)}cards covers={covers} passed={passed}/{len(results)}", flush=True)
+    if verdict == "PASS" and any(word in paging for word in ("REPEAT", "EMPTY", "FAIL")):
+        verdict = "PAGING"
+    print(f"{source:10} {verdict} {len(cards)}cards covers={covers} passed={passed}/{len(results)} {paging}", flush=True)
     for line in results:
         print("    " + line, flush=True)
     return verdict
@@ -195,7 +228,7 @@ def main() -> int:
         return 2
     sources = args.sources or [item["id"] for item in json.loads(body).get("sources", [])]
     verdicts = {source: check_source(args.base, source, args.kind, args.samples) for source in sources}
-    failed = [source for source, verdict in verdicts.items() if verdict == "FAIL"]
+    failed = [source for source, verdict in verdicts.items() if verdict in ("FAIL", "PAGING")]
     print(f"{len(verdicts)} sources, {len(failed)} failed" + (": " + ", ".join(failed) if failed else ""))
     return 1 if failed else 0
 

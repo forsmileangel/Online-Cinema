@@ -64,6 +64,9 @@ export type VideoDetail = {
 
 export type SourceInfo = { id: string; label: string; group?: string };
 
+/** A new mechanism that runs beside the earlier one until it is switched on. */
+export type Trial = { id: string; label: string; note: string; on: boolean; used: number; fallbacks: number };
+
 export type HistoryItem = {
   video_id: string;
   source: string;
@@ -93,4 +96,5 @@ export type Settings = {
   tv_code?: string;
   tv_url?: string;
   sources?: SourceInfo[];
+  trials?: Trial[];
 };

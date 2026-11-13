@@ -183,6 +183,15 @@ class SourceInfo(BaseModel):
     group: str = ""
 
 
+class TrialInfo(BaseModel):
+    id: str
+    label: str
+    note: str = ""
+    on: bool = False
+    used: int = 0
+    fallbacks: int = 0
+
+
 class SettingsOut(BaseModel):
     source: str = "hongguo"
     theme: str = ""
@@ -192,9 +201,11 @@ class SettingsOut(BaseModel):
     tv_code: str = ""
     tv_url: str = ""
     sources: list[SourceInfo] = []
+    trials: list[TrialInfo] = []
 
 
 class SettingsIn(BaseModel):
+    trials: dict[str, bool] | None = None
     source: str | None = None
     theme: str | None = None
     lan_tv: bool | None = None

@@ -3,7 +3,7 @@ import { api } from "../api";
 import { APP } from "../appConfig";
 import { AppearanceSettings } from "../components/AppearanceSettings";
 import { PhoneConnection } from "../components/PhoneConnection";
-import type { Settings } from "../types";
+import type { Settings, Trial } from "../types";
 
 type AccountState = { loggedIn: boolean; name: string };
 
@@ -101,6 +101,26 @@ function SourceAccount({ source }: { source: AccountSource }) {
   );
 }
 
+/** New mechanisms on trial: each stays off, with the earlier one in use, until its box is ticked. */
+function Trials({ trials, onSwitch }: { trials: Trial[]; onSwitch: (trial: Trial, on: boolean) => void }) {
+  if (!trials.length) return null;
+  return (
+    <section aria-label="新機制試用">
+      <h2 className="h1" style={{ fontSize: 20, marginTop: 36 }}>新機制試用</h2>
+      <p className="muted">預設關閉，關閉時完全使用原本的方式。開啟後若新機制失敗，會自動退回原本的方式並記一次。切換立即生效，不用重啟。</p>
+      {trials.map((trial) => (
+        <p key={trial.id}>
+          <label>
+            <input type="checkbox" checked={trial.on} onChange={(e) => onSwitch(trial, e.target.checked)} />{" "}
+            {trial.label}
+          </label>
+          <span className="muted"> · {trial.note}{trial.used || trial.fallbacks ? ` 已使用 ${trial.used} 次，退回 ${trial.fallbacks} 次。` : ""}</span>
+        </p>
+      ))}
+    </section>
+  );
+}
+
 /** The LAN addresses for a phone, worked out from the TV link (the server lists the IPs). */
 function StaticPhoneAddresses({ s }: { s: Settings }) {
   const phoneUrl = s.tv_url ? new URL(s.tv_url) : null;
@@ -163,6 +183,13 @@ export function SettingsPage() {
       setS(next);
       setMsg("已更新片源語言，請回首頁重新載入");
     } catch (e) { failed("更新片源語言")(e as Error); }
+  }
+
+  function switchTrial(trial: Trial, on: boolean) {
+    void api.saveSettings({ trials: { [trial.id]: on } }).then((next) => {
+      setS(next);
+      setMsg(on ? `已開啟試用：${trial.label}` : `已改回原本的方式：${trial.label}`);
+    }).catch(failed("切換新機制"));
   }
 
   function clearHistory() {
@@ -292,6 +319,8 @@ export function SettingsPage() {
           </div>
         </>
       ) : null}
+
+      <Trials trials={s.trials || []} onSwitch={switchTrial} />
 
       <h2 className="h1" style={{ fontSize: 20, marginTop: 36 }}>觀看紀錄</h2>
       <div className="actions">

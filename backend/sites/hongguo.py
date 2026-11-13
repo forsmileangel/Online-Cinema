@@ -11,14 +11,17 @@ from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
-from .. import http_client, pools, zh
-from ..hls_proxy import proxied_media
+from .. import http_client, pools, trials, zh
+from ..hls_proxy import dlna_media_url, proxied_media
 from ..models import Card, Episode, Listing, PickChip, PickGroup, SortOption, Tag, VideoDetail
 from ..security import (
     SiteBusy,
     UnsafeURL,
+    assert_https_url,
     assert_image_url,
     final_url_still_allowed,
+    forget_media_host,
+    remember_media_host,
     safe_search_query,
     safe_slug,
     safe_video_id,
@@ -107,7 +110,29 @@ def _hls(url: str) -> str:
     try:
         return proxied_media(u)
     except UnsafeURL:
+        return _learned_hls(u) if trials.on("hongguo_hosts") else ""
+
+
+def _learned_hls(u: str) -> str:
+    """Trial: a playlist on a host the fixed list lacks, named by the site's own player page."""
+    host = ""
+    try:
+        parsed = urlparse(u)
+        if not parsed.path.lower().endswith(".m3u8"):
+            raise UnsafeURL("not a playlist")
+        assert_https_url(u, {(parsed.hostname or "").lower()})  # Still https, the default port and a public address.
+        host = (parsed.hostname or "").lower()
+        remember_media_host(host, source="hongguo")
+        proxied = proxied_media(u)
+        # Accept the host only if what its playlist names can be fetched too; otherwise the
+        # video would open and then fail to play, which is worse than the earlier answer.
+        dlna_media_url(proxied, time.monotonic() + 12, validate=True)
+    except Exception:
+        forget_media_host(host)
+        trials.count("hongguo_hosts", fell_back=True)
         return ""
+    trials.count("hongguo_hosts")
+    return proxied
 
 
 def _card_from_anchor(a, seen: set[str]) -> Card | None:

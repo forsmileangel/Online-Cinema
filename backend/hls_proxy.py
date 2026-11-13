@@ -112,6 +112,8 @@ def _media_context(url: str) -> tuple[str, str | None]:
         return "https://www.mvffm.net/", "chrome131"
     if media_host_source(host) == "mmov":
         return "https://hk.mmov.io/", "chrome131"
+    if media_host_source(host) == "hongguo":
+        return "https://www.hongguoapp.cn/", "chrome131"
     if any(part in host for part in ("bfllvip", "fengbao", "baofeng", "ppqrrs", "10cong", "wangwangzyvod", "hongguoapp")):
         return "https://www.hongguoapp.cn/", "chrome131"
     if is_gimy_cdn(host) or "gimyai" in host or host.endswith("gimy.tw"):

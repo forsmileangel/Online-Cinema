@@ -221,6 +221,7 @@ export const api = {
     theme?: string;
     lan_tv?: boolean;
     in_kaohsiung?: boolean;
+    trials?: Record<string, boolean>;
   }) => req<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(body) }),
   tvStatus: () => req<{ paired: boolean }>("/api/tv/status", undefined, 8000),
   tvPair: (code: string) =>

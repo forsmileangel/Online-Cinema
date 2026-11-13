@@ -22,6 +22,7 @@ from . import cast_session
 from . import cast_devices as known_devices
 from . import db
 from . import lan
+from . import trials
 from . import tv_session
 from . import alternatives, display, home_fill, next_buffer, offline, sorting, terms
 from . import hls_proxy
@@ -90,6 +91,7 @@ class AccessGuard(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     host_guard.refresh()  # This PC's names, before any request is judged by them.
+    trials.arm()  # From here on the switches in settings decide which mechanisms run.
     offline._start_maintenance()
     # The health check runs on the event loop: the commit is read and the downloads counted before it is asked.
     await run_in_threadpool(_version)
@@ -534,6 +536,7 @@ def get_settings():
         tv_code=code if lan_on else "",
         tv_url=tv_url,
         sources=sites.available(),
+        trials=trials.listing(),
     )
 
 
@@ -558,6 +561,8 @@ def put_settings(body: SettingsIn):
             db.set_setting("source", catalog.normalize_source(body.source))
         if body.theme is not None:
             db.set_setting("theme", body.theme[:8000])
+        for name, enabled in (body.trials or {}).items():
+            trials.switch(name, enabled)
         if body.lan_tv is not None:
             db.set_setting("lan_tv", "1" if body.lan_tv else "0")
             if body.lan_tv:

@@ -16,10 +16,10 @@ SIBLINGS = {"MidnightCinema": "Online Cinema", "Online Cinema": "MidnightCinema"
 # Backend modules and tests with no site-specific line in them.
 SHARED_FILES = [
     "backend/__main__.py", "backend/alternatives.py", "backend/cast_quality.py", "backend/display.py",
-    "backend/home_fill.py", "backend/host_guard.py", "backend/img_cache.py", "backend/logsetup.py",
+    "backend/home_fill.py", "backend/host_guard.py", "backend/img_cache.py", "backend/line_memory.py", "backend/logsetup.py",
     "backend/nesthub.py", "backend/offline.py", "backend/pools.py", "backend/read_ahead.py",
     "backend/seg_cache.py", "backend/sorting.py", "backend/terms.py", "backend/translate.py",
-    "backend/tv_session.py", "backend/web_serving.py", "backend/zh.py",
+    "backend/trials.py", "backend/tv_session.py", "backend/web_serving.py", "backend/zh.py",
     "backend/sites/anigamer.py", "backend/sites/chinaq.py", "backend/sites/gimy.py", "backend/sites/hongguo.py",
     "backend/sites/mmov.py", "backend/sites/mvffm.py",
     "tests/test_alternatives.py", "tests/test_anigamer.py", "tests/test_cast_activation.py",
@@ -33,7 +33,7 @@ SHARED_FILES = [
     "tests/test_offline_priority.py", "tests/test_offline_recovery.py", "tests/test_offline_retention.py",
     "tests/test_offline_speed_and_recovery.py", "tests/test_offline_verified.py", "tests/test_pools.py",
     "tests/test_read_ahead.py", "tests/test_search_multi.py", "tests/test_seg_cache.py", "tests/test_sorting.py",
-    "tests/test_startup.py", "tests/test_terms.py", "tests/test_tv_pairing.py", "tests/test_wake.py",
+    "tests/test_startup.py", "tests/test_terms.py", "tests/test_trials.py", "tests/test_tv_pairing.py", "tests/test_wake.py",
     "tests/test_web_quality.py", "tests/test_web_serving.py", "tests/test_shared_files.py", "tests/test_zh.py",
     "tools/check-shared.py", "tools/check-sources.py", "tools/verify_sorts.py",
     "scripts/deploy.ps1", "scripts/test.ps1",

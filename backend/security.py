@@ -208,6 +208,14 @@ def remember_media_host(host: str, *, source: str = "") -> None:
                 _extra_media_sources[h] = source
 
 
+def forget_media_host(host: str) -> None:
+    """Take back a host that was remembered and then failed its check."""
+    h = (host or "").lower().rstrip(".")
+    with _extra_media_lock:
+        _extra_media_hosts.pop(h, None)
+        _extra_media_sources.pop(h, None)
+
+
 def media_host_source(host: str) -> str:
     h = (host or "").lower().rstrip(".")
     with _extra_media_lock:

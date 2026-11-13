@@ -12,7 +12,7 @@ from concurrent.futures import Future
 
 from bs4 import BeautifulSoup
 
-from .. import http_client
+from .. import http_client, line_memory
 from ..hls_proxy import dlna_media_url, proxied_media
 from ..models import Card, Episode, Listing, PickChip, PickGroup, SortOption, Tag, VideoDetail
 from ..security import (
@@ -483,7 +483,7 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
     src = ""
     master = ""
     last_error: Exception | None = None
-    candidates = [route for route in routes if pick_ep in route[2]][:3]
+    candidates = line_memory.first("gimy", video_id, [route for route in routes if pick_ep in route[2]], lambda route: route[0])[:3]
     for sid, title, eps in candidates:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -498,6 +498,7 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
             # A valid master URL may still contain unsupported segment URLs.
             # Check the playlist before choosing a route or stopping the TV.
             dlna_media_url(master, deadline, validate=True)
+            line_memory.played("gimy", video_id, sid)
             chosen = (sid, title, eps)
             break
         except SiteBusy:

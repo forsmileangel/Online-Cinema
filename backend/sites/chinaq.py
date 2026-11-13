@@ -10,7 +10,7 @@ from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
-from .. import http_client, zh
+from .. import http_client, line_memory, zh
 from ..hls_proxy import dlna_media_url, proxied_media
 from ..models import Card, Episode, Listing, PickChip, PickGroup, Tag, VideoDetail
 from ..security import (
@@ -312,11 +312,11 @@ def _qplays(num: str, ep: str) -> list[str]:
     return out
 
 
-def _pick_stream(urls: list[str]) -> str:
+def _pick_stream(urls: list[str], video_id: str = "") -> str:
     deadline = time.monotonic() + 30
     last_error: Exception | None = None
     attempts = 0
-    for src in urls:
+    for src in line_memory.first("chinaq", video_id, urls, line_memory.host):
         if attempts >= 3:
             break
         if time.monotonic() >= deadline:
@@ -328,6 +328,7 @@ def _pick_stream(urls: list[str]) -> str:
         try:
             # A listed source can be empty or contain unusable media URLs.
             dlna_media_url(proxied, deadline, validate=True)
+            line_memory.played("chinaq", video_id, line_memory.host(src))
             return proxied
         except SiteBusy:
             raise
@@ -360,7 +361,7 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
     if want and want not in ep_ids:
         raise SourceUnavailable("此來源尚未提供指定集數，請選擇已上架集數")
     pick = want or ep_ids[0]
-    master = _pick_stream(_qplays(num, pick))
+    master = _pick_stream(_qplays(num, pick), video_id)
     if not master:
         raise UnsafeURL("stream not found")
     episodes = [

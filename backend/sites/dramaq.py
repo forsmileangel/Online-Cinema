@@ -10,7 +10,7 @@ from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
-from .. import http_client, zh
+from .. import http_client, line_memory, zh
 from ..hls_proxy import dlna_media_url, proxied_media
 from ..models import Card, Episode, Listing, PickChip, PickGroup, Tag, VideoDetail
 from ..security import (
@@ -351,7 +351,7 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
     deadline = time.monotonic() + 30
     # A freshly listed episode can 404 on its first line while other lines already
     # play, so check each playlist before choosing it. A refusal stops at once.
-    for src in _plays(video_id, pick)[:4]:
+    for src in line_memory.first("dramaq", video_id, _plays(video_id, pick), line_memory.host)[:4]:
         candidate = _hls(src)
         if not candidate or time.monotonic() >= deadline:
             continue
@@ -362,6 +362,7 @@ def fetch_video(video_id: str, ep: str | None = None) -> VideoDetail:
         except Exception as e:
             checked = e
             continue
+        line_memory.played("dramaq", video_id, line_memory.host(src))
         master = candidate
         break
     if not master and checked:

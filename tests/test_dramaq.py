@@ -2,6 +2,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from backend import line_memory
 from backend.security import SiteBusy, SourceUnavailable, UnsafeURL, assert_hls_url, assert_image_url
 from backend.sites import available, dramaq
 
@@ -120,6 +121,32 @@ class DramaqTests(unittest.TestCase):
             with patch.object(dramaq, "dlna_media_url", side_effect=OSError("HTTP Error 404")):
                 with self.assertRaises(SourceUnavailable):
                     dramaq.fetch_video("202690895")
+
+    def test_trial_tries_the_line_that_played_first_on_the_next_episode(self):
+        def fake_get(path: str) -> str:
+            return load("dramaq_detail.html") if path.startswith("/detail/") else load("dramaq_play.html")
+
+        plays = ["https://hn.bfvvs.com/dead/index.m3u8", "https://v.kuktxu.com/live/index.m3u8"]
+        checked: list[str] = []
+
+        def check(url, deadline, validate=False):
+            checked.append(url)
+            if "dead" in url:
+                raise OSError("HTTP Error 404")
+            return url
+
+        line_memory.clear()
+        self.addCleanup(line_memory.clear)
+        with patch.object(dramaq, "_get", side_effect=fake_get), patch.object(dramaq, "_plays", return_value=plays),                 patch.object(dramaq, "proxied_media", side_effect=lambda url: "/api/hls?u=" + url),                 patch.object(dramaq, "dlna_media_url", side_effect=check):
+            dramaq.fetch_video("202690895")
+            dramaq.fetch_video("202690895", "ep2")
+            self.assertEqual(len(checked), 4)  # Off: the dead line is tried first every time.
+            checked.clear()
+            with patch.object(line_memory.trials, "on", return_value=True):
+                dramaq.fetch_video("202690895")
+                dramaq.fetch_video("202690895", "ep2")
+            self.assertEqual(len(checked), 3)
+            self.assertIn("/live/", checked[-1])
 
     def test_cdn_and_cover_hosts_are_allowed(self):
         with patch("backend.security._assert_not_private"):

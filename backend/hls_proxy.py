@@ -11,7 +11,7 @@ from starlette.requests import Request
 from urllib.parse import urlparse
 
 from . import next_buffer, read_ahead
-from . import http_client, seg_cache, lan
+from . import http_client, seg_cache, lan, trials
 from .security import (
     UnsafeURL,
     SiteBusy,
@@ -42,6 +42,17 @@ def proxied_media(url: str, origin: str = "", *, nesthub: bool = False, web: boo
     return path
 
 
+def _trial_port(parsed, source: str) -> int | None:
+    """Trial "hongguo_hosts": the port a Hongguo playlist names for its own media, when that is not 443."""
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if port in (None, 443) or source != "hongguo" or not trials.on("hongguo_hosts"):
+        return None
+    return port
+
+
 def _playlist_media_url(url: str, parent_host: str) -> str:
     source = media_host_source(parent_host)
     try:
@@ -54,8 +65,9 @@ def _playlist_media_url(url: str, parent_host: str) -> str:
         path = parsed.path.lower()
         if not host or not path.endswith((".m3u8", ".ts", ".m4s", ".key", ".jpeg", ".jpg", ".mp4")):
             raise
-        assert_https_url(url, {host})
-        remember_media_host(host, source=source)
+        port = _trial_port(parsed, source)
+        assert_https_url(url, {host}, ports={port} if port else frozenset())
+        remember_media_host(host, source=source, port=port)
         validated = assert_hls_url(url)
     if source:
         # Carry the source Referer across nested playlists, keys and segments,

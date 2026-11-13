@@ -22,7 +22,7 @@ class Armed(unittest.TestCase):
         connect = patch.object(db, 'connect', return_value=self.conn)
         connect.start()
         self.addCleanup(connect.stop)
-        for clear in (db._settings.clear, line_memory.clear, security._extra_media_hosts.clear, trials.disarm):
+        for clear in (db._settings.clear, line_memory.clear, security._extra_media_hosts.clear, security._extra_media_ports.clear, trials.disarm):
             clear()
             self.addCleanup(clear)
         trials.arm()
@@ -194,12 +194,47 @@ class HongguoHostTests(Armed):
 
     def test_a_host_whose_playlist_names_media_we_refuse_is_not_accepted(self):
         trials.switch('hongguo_hosts', True)
-        for playlist in (b'#EXTM3U\n#EXTINF:5,\nhttps://ts.other.example:65/a/0.ts\n', b'', b'<html>blocked</html>'):
+        for playlist in (b'#EXTM3U\n#EXTINF:5,\nhttp://ts.other.example/a/0.ts\n', b'', b'<html>blocked</html>'):
             with self.subTest(playlist=playlist), patch.object(security, '_assert_not_private'), self.serve(playlist):
                 self.assertEqual(hongguo._hls(self.NEW), '')
         self.assertEqual(self.counts('hongguo_hosts'), (0, 3))
         self.assertEqual(security.media_host_source('hn.new-line.example'), '')
         self.assertNotIn('hn.new-line.example', security._extra_media_hosts)
+
+    def test_the_trial_accepts_the_port_a_hongguo_playlist_names_for_its_media(self):
+        segment = 'https://ts.other.example:65/a/0.ts'
+        playlist = f'#EXTM3U\n#EXTINF:5,\n{segment}\n'.encode()
+        with patch.object(security, '_assert_not_private'):
+            with self.assertRaises(security.UnsafeURL):
+                security.assert_hls_url(segment)
+            trials.switch('hongguo_hosts', True)
+            with self.serve(playlist):
+                self.assertEqual(hongguo._hls(self.NEW), hls_proxy.proxied_media(self.NEW))
+            self.assertEqual(security.assert_hls_url(segment), segment)  # That host and that port, from now on.
+            self.assertEqual(security.final_url_still_allowed(segment, security.hls_allowed_hosts(segment)), segment)
+            self.assertEqual(hls_proxy._media_context(segment)[0], 'https://www.hongguoapp.cn/')
+            for other in ('https://ts.other.example:66/a/0.ts', 'https://hn.new-line.example:65/a/0.ts', 'http://ts.other.example:65/a/0.ts'):
+                with self.subTest(other=other), self.assertRaises(security.UnsafeURL):
+                    security.assert_hls_url(other)
+            security.forget_media_host('ts.other.example')
+            with self.assertRaises(security.UnsafeURL):
+                security.assert_hls_url(segment)
+
+    def test_other_sources_and_the_switch_being_off_never_gain_a_port(self):
+        segment = 'https://ts.other.example:65/a/0.ts'
+        with patch.object(security, '_assert_not_private'):
+            security.remember_media_host('parent.example', source='hongguo')
+            with self.assertRaises(security.UnsafeURL):  # Off.
+                hls_proxy._playlist_media_url(segment, 'parent.example')
+            trials.switch('hongguo_hosts', True)
+            security.remember_media_host('parent.example', source='mmov')
+            with self.assertRaises(security.UnsafeURL):  # Not Hongguo's playlist.
+                hls_proxy._playlist_media_url(segment, 'parent.example')
+            security.remember_media_host('parent.example', source='hongguo')
+            with patch.object(security, '_assert_not_private', side_effect=security.UnsafeURL('private address')):
+                with self.assertRaises(security.UnsafeURL):  # Still a public address only.
+                    hls_proxy._playlist_media_url(segment, 'parent.example')
+        self.assertEqual(security._extra_media_ports, {})
 
     def test_the_trial_still_refuses_what_is_not_a_public_https_playlist(self):
         trials.switch('hongguo_hosts', True)

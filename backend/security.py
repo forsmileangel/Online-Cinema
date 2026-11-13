@@ -25,6 +25,8 @@ DRAMASQ_CDN_RE = re.compile(r"(?:^|\.)(?:bfvvs\.com|kuktxu\.com)$")
 _EXTRA_MEDIA_TTL = 3600.0
 _extra_media_hosts: dict[str, float] = {}
 _extra_media_sources: dict[str, str] = {}
+# Ports other than 443 that a source's own playlist named for a remembered host.
+_extra_media_ports: dict[str, set[int]] = {}
 _extra_media_lock = threading.RLock()
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -168,7 +170,7 @@ def _assert_not_private(host: str) -> None:
         _public_hosts[host] = now + _PUBLIC_DNS_TTL
 
 
-def assert_https_url(url: str, allowed_hosts: set[str]) -> str:
+def assert_https_url(url: str, allowed_hosts: set[str], *, ports: frozenset[int] | set[int] = frozenset()) -> str:
     if not url or len(url) > 4000:
         raise UnsafeURL("invalid url")
     parsed = urlparse(url)
@@ -181,7 +183,7 @@ def assert_https_url(url: str, allowed_hosts: set[str]) -> str:
     host = (parsed.hostname or "").lower()
     if not _host_ok(host, allowed_hosts):
         raise UnsafeURL("host not allowed")
-    if parsed.port not in (None, 443):
+    if parsed.port not in (None, 443) and parsed.port not in ports and not _remembered_port(host, parsed.port):
         raise UnsafeURL("port not allowed")
     _assert_not_private(host)
     return url
@@ -195,7 +197,7 @@ def assert_image_url(url: str) -> str:
     return assert_https_url(url, IMAGE_HOSTS)
 
 
-def remember_media_host(host: str, *, source: str = "") -> None:
+def remember_media_host(host: str, *, source: str = "", port: int | None = None) -> None:
     h = (host or "").lower().rstrip(".")
     if h:
         now = time.monotonic()
@@ -203,9 +205,17 @@ def remember_media_host(host: str, *, source: str = "") -> None:
             for expired in [key for key, until in _extra_media_hosts.items() if until <= now]:
                 del _extra_media_hosts[expired]
                 _extra_media_sources.pop(expired, None)
+                _extra_media_ports.pop(expired, None)
             _extra_media_hosts[h] = now + _EXTRA_MEDIA_TTL
             if source:
                 _extra_media_sources[h] = source
+            if port not in (None, 443):
+                _extra_media_ports.setdefault(h, set()).add(port)
+
+
+def _remembered_port(host: str, port: int) -> bool:
+    with _extra_media_lock:
+        return _extra_media_hosts.get(host, 0) > time.monotonic() and port in _extra_media_ports.get(host, ())
 
 
 def forget_media_host(host: str) -> None:
@@ -214,6 +224,7 @@ def forget_media_host(host: str) -> None:
     with _extra_media_lock:
         _extra_media_hosts.pop(h, None)
         _extra_media_sources.pop(h, None)
+        _extra_media_ports.pop(h, None)
 
 
 def media_host_source(host: str) -> str:
@@ -253,6 +264,7 @@ def is_chinaq_cdn(host: str) -> bool:
             return True
         _extra_media_hosts.pop(h, None)
         _extra_media_sources.pop(h, None)
+        _extra_media_ports.pop(h, None)
         return False
 
 

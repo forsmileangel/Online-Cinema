@@ -186,8 +186,14 @@ def _pages(html: str, tid: str, page: int) -> int | None:
     return last if last >= page else None
 
 
+def _list_cards(html: str) -> list[Card]:
+    """The page's own list. Category pages put a 熱播推薦 block above it, the same twelve on every page."""
+    grids = BeautifulSoup(html or "", "html.parser").select("main > div.grid")
+    return parse_cards("".join(str(grid) for grid in grids)) or parse_cards(html)
+
+
 def _listing(html: str, page: int, title: str, tid: str) -> Listing:
-    items = parse_cards(html)
+    items = _list_cards(html)
     _remember_cards(items)
     pages = _pages(html, tid, page)
     if pages:

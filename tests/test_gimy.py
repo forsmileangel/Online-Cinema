@@ -45,6 +45,16 @@ class GimyTests(unittest.TestCase):
         self.assertTrue(listing.has_next)
         self.assertEqual(listing.title, "陸劇")
 
+    def test_category_pages_leave_out_the_recommended_block_every_page_repeats(self):
+        def poster(number):
+            return f'<a class="poster" href="/detail/{number}.html" title="測試{number}"><img data-src="https://imgs.1777cdn.com/a.jpg"></a>'
+        page = ('<main class="container page" id="main"><div class="block"><h2>熱播推薦</h2><div class="grid">' + poster(1) + poster(2)
+                + '</div></div><div class="grid">' + poster(3) + poster(4) + '</div></main>')
+        with patch.object(gimy, "_get", return_value=page):
+            self.assertEqual([card.id for card in gimy.browse("movie", page=2).items], ["3", "4"])
+        with patch.object(gimy, "_get", return_value=page.replace('</div><div class="grid">' + poster(3) + poster(4) + '</div>', '</div>')):
+            self.assertEqual([card.id for card in gimy.browse("movie", page=2).items], ["1", "2"])  # No list of its own: as before.
+
     def test_browse_unknown_rejected(self):
         with self.assertRaises(UnsafeURL):
             gimy.browse("nope")
